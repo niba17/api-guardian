@@ -29,5 +29,10 @@ redis-data/
 *.aof
 dump.rd
 
+# Frontend (Sub-folder)
+web/dashboard-ui/node_modules/
+web/dashboard-ui/dist/
+web/dashboard-ui/.env.local
+
 # Databases & GeoIP (Opsional, biasanya .mmdb terlalu besar untuk Git)
 configs/geoip/*.mmdb 
