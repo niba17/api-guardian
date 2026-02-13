@@ -26,7 +26,7 @@ type AppConfig struct {
 func Load() *AppConfig {
 	// 1. Coba load .env (Tapi jangan panic kalau gagal, karena di Docker kita pakai Env Vars langsung)
 	if err := godotenv.Load(); err != nil {
-		log.Info().Msg("ℹ️  Tidak menemukan file .env, menggunakan System Environment Variables")
+		log.Info().Msg(".env not found, using System Environment Variables")
 	}
 
 	// 2. Setup Redis
@@ -64,7 +64,7 @@ func getEnv(key, fallback string) string {
 func parseDuration(d string) time.Duration {
 	v, err := time.ParseDuration(d)
 	if err != nil {
-		log.Warn().Msgf("⚠️ Format durasi salah: %s. Menggunakan default 60s", d)
+		log.Warn().Msgf("Wrong duration format: %s. using default 60s", d)
 		return 60 * time.Second
 	}
 	return v
@@ -90,13 +90,13 @@ func connectRedisClient() *redis.Client {
 		cancel()
 
 		if err == nil {
-			log.Info().Msg("✅ Berhasil jabat tangan dengan Redis!")
+			log.Info().Msg("Redis connected")
 			return rdb
 		}
-		log.Warn().Msgf("⏳ Redis belum siap (Percobaan %d/7)... error: %v", i+1, err)
+		log.Warn().Msgf("Waiting Redis (retry %d/7)... error: %v", i+1, err)
 		time.Sleep(3 * time.Second) // Tunggu 3 detik sebelum coba lagi
 	}
 
-	log.Error().Err(err).Msg("❌ Redis Gagal Konek (Sistem akan jalan tanpa Cache)")
+	log.Error().Err(err).Msg("Fail to connect Redis (System running without cache)")
 	return rdb
 }

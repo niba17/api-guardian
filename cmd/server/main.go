@@ -37,10 +37,10 @@ func main() {
 	// b. GeoIP Database
 	geoDB, err := geoip2.Open(cfg.GeoDBPath)
 	if err != nil {
-		log.Warn().Err(err).Str("path", cfg.GeoDBPath).Msg("⚠️ Gagal load GeoIP DB")
+		log.Warn().Err(err).Str("path", cfg.GeoDBPath).Msg("Fail to load GeoIP Database")
 	} else {
 		defer geoDB.Close()
-		log.Info().Str("path", cfg.GeoDBPath).Msg("✅ Database GeoIP Berhasil Dimuat!")
+		log.Info().Str("path", cfg.GeoDBPath).Msg("GeoIP Database loaded")
 	}
 
 	// 3. Setup Load Balancer
@@ -91,7 +91,7 @@ func main() {
 		log.Info().
 			Str("port", cfg.Port).
 			Int("backends", len(cfg.TargetURLs)).
-			Msg("🚀 API Guardian Command Center is Ready...")
+			Msg("API Guardian is standing guard")
 
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatal().Err(err).Msg("Server failed")
@@ -106,7 +106,7 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	srv.Shutdown(ctx)
-	log.Info().Msg("Server shutdown complete.")
+	log.Info().Msg("Server shutdown complete")
 }
 
 func setupLogger() {

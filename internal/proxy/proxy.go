@@ -80,7 +80,7 @@ func NewLoadBalancer(targets []string) (*LoadBalancer, error) {
 		}
 		targetURL, err := url.Parse(target)
 		if err != nil {
-			log.Error().Err(err).Str("url", target).Msg("❌ URL Backend tidak valid")
+			log.Error().Err(err).Str("url", target).Msg("Invalid Backend URL")
 			continue
 		}
 
@@ -126,11 +126,11 @@ func NewLoadBalancer(targets []string) (*LoadBalancer, error) {
 		}
 
 		proxies = append(proxies, proxy)
-		log.Info().Str("target", target).Msg("✅ Backend terdaftar di Balancer")
+		log.Info().Str("target", target).Msg("Backend addressed on Balancer")
 	}
 
 	if len(proxies) == 0 {
-		return nil, fmt.Errorf("no valid backend targets found in configuration")
+		return nil, fmt.Errorf("No valid backend targets found in configuration")
 	}
 
 	return &LoadBalancer{proxies: proxies}, nil

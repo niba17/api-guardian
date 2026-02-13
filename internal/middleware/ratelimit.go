@@ -37,15 +37,15 @@ func RateLimiter(store storage.LimiterStore, whitelist []string, next http.Handl
 		banKey := "blacklist:" + ip
 		exists, err := store.Exists(ctx, banKey)
 		if err != nil {
-			log.Error().Err(err).Msg("⚠️ RateLimiter: Redis Error Check Blacklist")
+			log.Error().Err(err).Msg("RateLimiter: Redis Error Check Blacklist")
 			// Lanjut dulu kalau error cek ban, nanti dicek di limit
 		}
 
 		if exists > 0 {
-			log.Warn().Str("ip", ip).Msg("⛔ RateLimiter: BLOCKED (User is Banned)")
+			log.Warn().Str("ip", ip).Msg("RateLimiter: BLOCKED (User Banned)")
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusForbidden)
-			w.Write([]byte(`{"error": "IP Anda di-BANNED selama 1 jam."}`))
+			w.Write([]byte(`{"error": "Your IP banned for 1 hour"}`))
 			return
 		}
 
@@ -55,7 +55,7 @@ func RateLimiter(store storage.LimiterStore, whitelist []string, next http.Handl
 
 		// [DEBUG] Tangkap jika Redis Error/Mati
 		if err != nil {
-			log.Error().Err(err).Msg("💥 RateLimiter: REDIS ERROR on INCR (Fail Open)")
+			log.Error().Err(err).Msg("RateLimiter: REDIS ERROR on INCR (Fail Open)")
 			// Di sini lubangnya! Kalau Redis error, dia lolos.
 			// Untuk debugging, kita biarkan lolos tapi LOG-nya merah.
 			next.ServeHTTP(w, r)
@@ -84,26 +84,26 @@ func RateLimiter(store storage.LimiterStore, whitelist []string, next http.Handl
 			log.Warn().Str("ip", ip).
 				Int64("hits", count).
 				Int64("violations", violationCount).
-				Msg("🚫 RateLimiter: OVER LIMIT")
+				Msg("RateLimiter: OVER LIMIT")
 
 			if violationCount >= MAX_VIOLATIONS {
-				log.Error().Str("ip", ip).Msg("🔥 RateLimiter: BAN HAMMER EXECUTED!")
+				log.Error().Str("ip", ip).Msg("RateLimiter: BAN HAMMER EXECUTED!")
 
 				// Tulis Blacklist
 				err := store.Set(ctx, banKey, "banned", BAN_DURATION)
 				if err != nil {
-					log.Error().Err(err).Msg("❌ RateLimiter: Gagal Tulis Blacklist ke Redis")
+					log.Error().Err(err).Msg("RateLimiter: Fail to write Blacklist on Redis")
 				}
 
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusForbidden)
-				w.Write([]byte(`{"error": "Selamat! Anda resmi di-BANNED."}`))
+				w.Write([]byte(`{"error": "Your IP is banned"}`))
 				return
 			}
 
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusTooManyRequests)
-			w.Write([]byte(fmt.Sprintf(`{"error": "Terlalu Cepat! Sisa nyawa: %d"}`, remainingLives)))
+			w.Write([]byte(fmt.Sprintf(`{"error": "Too many request, chances remaining: %d"}`, remainingLives)))
 			return
 		}
 

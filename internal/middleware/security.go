@@ -15,7 +15,7 @@ func APIKeyValidator(validKeys []string, next http.Handler) http.Handler {
 			log.Warn().Str("module", "auth").Str("ip", r.RemoteAddr).Msg("Missing API Key")
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
-			w.Write([]byte(`{"error": "Unauthorized", "message": "Mana kunci API-nya, Bos?"}`))
+			w.Write([]byte(`{"error": "Unauthorized", "message": "Missing API Key"}`))
 			return
 		}
 
@@ -31,7 +31,7 @@ func APIKeyValidator(validKeys []string, next http.Handler) http.Handler {
 			log.Warn().Str("module", "auth").Str("ip", r.RemoteAddr).Msg("Invalid API Key")
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusForbidden)
-			w.Write([]byte(`{"error": "Forbidden", "message": "Kunci salah! Bos bukan member ya?"}`))
+			w.Write([]byte(`{"error": "Forbidden", "message": "Invalid API Key"}`))
 			return
 		}
 

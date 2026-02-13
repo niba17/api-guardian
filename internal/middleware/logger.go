@@ -214,7 +214,7 @@ func AuditLogger(geoDB *geoip2.Reader, rdb *redis.Client, next http.Handler) htt
 
 			// 2. Cek koneksi
 			if err := client.Ping(bgCtx).Err(); err != nil {
-				log.Error().Err(err).Msg("⚠️ Redis tidak merespon saat update stats")
+				log.Error().Err(err).Msg("Redis not respond while updating stats")
 				return
 			}
 
@@ -233,7 +233,7 @@ func AuditLogger(geoDB *geoip2.Reader, rdb *redis.Client, next http.Handler) htt
 
 			// 4. Eksekusi
 			if _, err := pipe.Exec(bgCtx); err != nil {
-				log.Error().Err(err).Msg("❌ Gagal eksekusi pipeline Redis")
+				log.Error().Err(err).Msg("Failed to execute Redis pipeline")
 			}
 		}(logData, rdb)
 

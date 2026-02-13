@@ -23,5 +23,11 @@ docs/
 step.txt
 test.http
 
+# Database Data
+redis-data/
+*.rdb
+*.aof
+dump.rd
+
 # Databases & GeoIP (Opsional, biasanya .mmdb terlalu besar untuk Git)
 configs/geoip/*.mmdb 
