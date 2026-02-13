@@ -1,0 +1,27 @@
+# Binary files
+guardian-app
+main
+main.exe
+*.exe
+
+.vscode/
+.idea/
+
+node_modules/
+dist/
+.env.local
+.git
+.env
+
+# Logs
+logs/
+*.log
+
+vendor/  
+
+docs/
+step.txt
+test.http
+
+# Databases & GeoIP (Opsional, biasanya .mmdb terlalu besar untuk Git)
+configs/geoip/*.mmdb 

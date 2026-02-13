@@ -1,0 +1,19 @@
+@import "tailwindcss";
+
+@theme {
+  /* Definisikan Warna Guardian di sini */
+  --color-guardian-dark: #020617;
+  --color-guardian-card: #0f172a;
+  --color-guardian-primary: #10b981;
+  --color-guardian-danger: #ef4444;
+  --color-guardian-accent: #3b82f6;
+  --color-guardian-warning: #f59e0b;
+
+  /* Animasi Kustom */
+  --animate-pulse-slow: pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* Layer Base */
+body {
+  @apply bg-guardian-dark text-slate-100 antialiased;
+}

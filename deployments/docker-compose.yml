@@ -1,0 +1,46 @@
+version: "3.8"
+
+services:
+  # 1. Database Redis (Kotak Hitam Data)
+  redis-db:
+    image: redis:7-alpine # 👈 Ganti jadi ini (Jauh lebih ringan)
+    container_name: guardian-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s # 👈 Lebih cepat ceknya
+      timeout: 2s
+      retries: 10
+    ports:
+      - "6380:6379"
+    volumes:
+      - ../redis-data:/data
+    networks:
+      - guardian-net
+
+  # 2. Aplikasi API Guardian
+  api-guardian:
+    build:
+      context: ../
+      dockerfile: deployments/Dockerfile
+    container_name: api-guardian-app
+    env_file:
+      - ../.env
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - REDIS_ADDR=redis-db:6379
+      - GEO_DB_PATH=/app/configs/geoip/GeoLite2-City.mmdb
+      - TARGET_URL=https://www.google.com
+    volumes:
+      - ../logs:/app/logs
+    depends_on:
+      redis-db:
+        condition: service_healthy # 👈 Tunggu Redis beneran siap
+    networks:
+      - guardian-net
+
+networks:
+  guardian-net:
+    driver: bridge
