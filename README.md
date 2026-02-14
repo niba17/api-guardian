@@ -14,9 +14,12 @@ This project is designed as the **First Line of Defense** to protect backend ser
 
 - ✅ **Zero Trust Architecture**: No request is trusted by default; everything must be validated.
 - ✅ **API Key Validation**: The gate opens only for clients with valid credentials (`X-API-KEY`).
-- ✅ **Redis-Powered Rate Limiter**: Limits requests per IP/minute to prevent _Brute Force_ and DDoS attacks.
+- ✅ **Distributed Token Bucket Algorithm**: Implemented via Redis Lua Scripting to ensure atomic operations. This prevents "race conditions" in high-traffic distributed environments.
+- ✅ **State Persistence**: Rate limit counters and buckets are stored in Redis, meaning the system state survives application restarts (No "amnesia" on reboot).
 - ✅ **Secure Reverse Proxy**: Hides the original server identity and manages HTTP headers automatically.
-- ✅ **Dynamic Blacklist**: Automatically blocks IPs permanently if they engage in repeated attacks.
+- ✅ **Fail-Closed Security Logic**: Designed with a "Security First" mindset. If the Redis connection drops, the system defaults to a safe state to protect backend integrity.
+- ✅ **Violation Counter**: Tracks repeated limit breaches (429 Too Many Requests) using a dedicated violation:{ip} registry in Redis.
+- ✅ **Dynamic Blacklist**: Automatically escalates repeat offenders to a "Blacklist" state once they exceed the MAX_VIOLATIONS threshold.
 - ✅ **Basic Web Application Firewall (WAF)**: Inspecting every incoming HTTP request in real-time before it can reach the backend services or the database.
 - ✅ **IP Whitelisting**: A special lane (VVIP) for administrator IPs or internal services to bypass limitations.
 - ✅ **Circuit Breakers**: Adds system intelligence by automatically cutting off traffic to a failing backend.
@@ -26,8 +29,9 @@ This project is designed as the **First Line of Defense** to protect backend ser
 
 - ✅ **GeoIP & Device Intelligence**: Automatically detects User Country, City, OS, Browser, and Bot status for forensic analysis.
 - ✅ **Smart Response Caching (Redis)**: intercepts repeated requests for the same data and serves them directly from memory, bypassing the expensive process of re-querying the database or re-processing business logic.
+- ✅ **Relational Audit Logging**: Every security event is synchronized to a PostgreSQL database, enabling long-term trend analysis and legal compliance.
 - ✅ **Prometheus Metrics Exporter**: Exposes internal system health and performance data through a `/metrics` endpoint, allowing DevOps teams to scrape, store, and visualize real-time data using the industry-standard Prometheus & Grafana stack.
-- ✅ **Structured Audit Logging**: JSON formatted logs (Zerolog) capturing IP, Latency, Method, and User Agent (Ready for ELK Stack).
+- ✅ **Structured Audit Logging**: Uses Zerolog for high-performance, machine-readable logs, making the system 100% ready for ELK Stack or Grafana Loki integration.
 - ✅ **Log Rotation**: Automatic log file management (Lumberjack) to prevent disk saturation.
 - ✅ **Round-Robin Load Balancer**: Enables the gateway to manage a pool of multiple backend instances, ensuring the system remains operational even if one server fails.
 - ✅ **Graceful Shutdown**: Handles `SIGTERM` signals to terminate services without cutting off active connections.
