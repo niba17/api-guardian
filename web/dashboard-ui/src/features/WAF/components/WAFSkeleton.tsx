@@ -1,6 +1,6 @@
 import Skeleton from "../../../components/ui/Skeleton";
 
-export default function ThreatsSkeleton() {
+export default function WAFSkeleton() {
   return (
     <div className="space-y-8">
       {/* Top 3 Cards */}

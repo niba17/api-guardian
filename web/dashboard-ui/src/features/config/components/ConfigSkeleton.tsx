@@ -1,6 +1,6 @@
 import Skeleton from "../../../components/ui/Skeleton";
 
-export default function SettingsSkeleton() {
+export default function ConfigSkeleton() {
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
       {[...Array(2)].map((_, i) => (

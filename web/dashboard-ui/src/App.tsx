@@ -4,9 +4,9 @@ import {
   Route,
   Navigate,
 } from "react-router-dom";
-import Dashboard from "./pages/Dashboard";
-import Settings from "./pages/Settings";
-import Threats from "./pages/Threats";
+import Overview from "./pages/Overview";
+import Config from "./pages/Config";
+import WAF from "./pages/WAF";
 import Traffic from "./pages/Traffic";
 import Login from "./pages/Login"; // 👈 Import Login
 import ProtectedRoute from "./routes/ProtectedRoute"; // 👈 Import Satpam
@@ -19,9 +19,9 @@ function App() {
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route element={<ProtectedRoute />}>
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/settings" element={<Settings />} />
-            <Route path="/threats" element={<Threats />} />
+            <Route path="/" element={<Overview />} />
+            <Route path="/settings" element={<Config />} />
+            <Route path="/threats" element={<WAF />} />
             <Route path="/traffic" element={<Traffic />} />
           </Route>
 

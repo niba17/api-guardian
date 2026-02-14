@@ -14,8 +14,7 @@ dist/
 .env
 
 # Logs
-logs/
-*.log
+logs/*.log
 
 vendor/  
 
@@ -24,6 +23,7 @@ step.txt
 test.http
 
 # Database Data
+postgres-data/
 redis-data/
 *.rdb
 *.aof

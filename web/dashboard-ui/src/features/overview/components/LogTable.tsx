@@ -1,4 +1,11 @@
-import { CheckCircle, Shield } from "lucide-react"; // 👈 Import hanya yang dipakai
+import {
+  CheckCircle,
+  Shield,
+  Monitor,
+  Smartphone,
+  Globe,
+  Bot,
+} from "lucide-react";
 import type { SecurityLog } from "../../../types/api.types";
 
 interface LogTableProps {
@@ -7,12 +14,26 @@ interface LogTableProps {
 }
 
 export default function LogTable({ logs, onLogClick }: LogTableProps) {
+  // Helper untuk menentukan icon Device
+  const getDeviceIcon = (os?: string, isBot?: boolean) => {
+    if (isBot) return <Bot size={14} className="text-orange-400" />;
+    const lowerOS = os?.toLowerCase() || "";
+    if (lowerOS.includes("win"))
+      return <Monitor size={14} className="text-blue-400" />;
+    if (lowerOS.includes("ios") || lowerOS.includes("android"))
+      return <Smartphone size={14} className="text-purple-400" />;
+    return <Globe size={14} className="text-slate-400" />;
+  };
+
   return (
     <div className="bg-guardian-card border border-slate-800 rounded-3xl overflow-hidden shadow-lg">
       <div className="p-6 border-b border-slate-800 flex justify-between items-center">
         <h3 className="font-bold text-lg text-white flex items-center gap-2">
           <ActivityLogIcon /> Live Audit Logs
         </h3>
+        <span className="text-xs text-slate-500 font-mono">
+          Showing last {logs.length} activities
+        </span>
       </div>
 
       <div className="overflow-x-auto">
@@ -20,10 +41,10 @@ export default function LogTable({ logs, onLogClick }: LogTableProps) {
           <thead className="bg-slate-900/50 text-slate-400 text-xs uppercase tracking-wider">
             <tr>
               <th className="p-4 font-medium">Timestamp</th>
-              <th className="p-4 font-medium">Source IP</th>
+              <th className="p-4 font-medium">Origin & Device</th>
               <th className="p-4 font-medium">Endpoint</th>
-              <th className="p-4 font-medium">Status</th>
-              <th className="p-4 font-medium">Action</th>
+              <th className="p-4 font-medium">Response</th>
+              <th className="p-4 font-medium">Threat Type</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-800 text-sm">
@@ -43,19 +64,32 @@ export default function LogTable({ logs, onLogClick }: LogTableProps) {
                   onClick={() => onLogClick(log)}
                   className="group hover:bg-slate-800/50 transition-colors cursor-pointer"
                 >
+                  {/* TIMESTAMP */}
                   <td className="p-4 text-slate-400 font-mono whitespace-nowrap">
                     {new Date(log.timestamp).toLocaleTimeString()}
                   </td>
+
+                  {/* SOURCE & DEVICE INTEL */}
                   <td className="p-4">
                     <div className="flex flex-col">
-                      <span className="font-medium text-slate-200 font-mono">
-                        {log.ip}
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-slate-200 font-mono">
+                          {log.ip}
+                        </span>
+                        <div className="flex items-center gap-1 bg-slate-800 px-1.5 py-0.5 rounded border border-slate-700">
+                          {getDeviceIcon(log.os, log.is_bot)}
+                          <span className="text-[10px] text-slate-400 uppercase font-bold">
+                            {log.browser}
+                          </span>
+                        </div>
+                      </div>
                       <span className="text-xs text-slate-500">
                         {log.city}, {log.country}
                       </span>
                     </div>
                   </td>
+
+                  {/* ENDPOINT */}
                   <td className="p-4">
                     <div className="flex items-center gap-2">
                       <span
@@ -71,32 +105,47 @@ export default function LogTable({ logs, onLogClick }: LogTableProps) {
                       >
                         {log.method}
                       </span>
-                      {/* 👇 FIX: Ganti max-w-[200px] jadi max-w-50 */}
-                      <span className="text-slate-300 font-mono truncate max-w-50">
+                      <span
+                        className="text-slate-300 font-mono truncate max-w-40"
+                        title={log.path}
+                      >
                         {log.path}
                       </span>
                     </div>
                   </td>
+
+                  {/* PERFORMANCE */}
                   <td className="p-4">
-                    <span
-                      className={`font-mono font-bold ${
-                        log.status >= 400 ? "text-red-400" : "text-emerald-400"
-                      }`}
-                    >
-                      {log.status}
-                    </span>
-                    <span className="text-xs text-slate-500 ml-2">
-                      {log.latency}ms
-                    </span>
-                  </td>
-                  <td className="p-4">
-                    {log.is_blocked ? (
-                      <span className="flex items-center gap-1 text-red-400 text-xs font-bold bg-red-400/10 px-2 py-1 rounded-full w-fit">
-                        <Shield size={12} /> Blocked
+                    <div className="flex flex-col">
+                      <span
+                        className={`font-mono font-bold ${
+                          log.status >= 400
+                            ? "text-red-400"
+                            : "text-emerald-400"
+                        }`}
+                      >
+                        {log.status}
                       </span>
+                      <span className="text-[10px] text-slate-500">
+                        {log.latency}ms
+                      </span>
+                    </div>
+                  </td>
+
+                  {/* Threat Type */}
+                  <td className="p-2">
+                    {log.is_blocked ? (
+                      <div className="flex flex-col gap-1">
+                        <span className="flex items-center gap-1 text-red-400 text-[11px] font-bold bg-red-400/10 px-2 py-0.5 rounded-full w-fit border border-red-400/20">
+                          <Shield size={12} /> {log.threat_type}
+                        </span>
+                        <span className="text-[10px] text-slate-500 font-mono ml-2">
+                          Reason: {log.threat_details}
+                        </span>
+                      </div>
                     ) : (
-                      <span className="flex items-center gap-1 text-emerald-400 text-xs font-bold bg-emerald-400/10 px-2 py-1 rounded-full w-fit">
-                        <CheckCircle size={12} /> Allowed
+                      <span className="flex items-center gap-1 text-emerald-400 text-[11px] font-bold bg-emerald-400/10 px-2 py-0.5 rounded-full w-fit border border-emerald-400/20">
+                        <CheckCircle size={12} /> Authorized
                       </span>
                     )}
                   </td>
@@ -110,7 +159,6 @@ export default function LogTable({ logs, onLogClick }: LogTableProps) {
   );
 }
 
-// Komponen Ikon Kedip-kedip (Visual Only)
 function ActivityLogIcon() {
   return (
     <div className="relative flex h-2 w-2">

@@ -18,13 +18,16 @@ type AppConfig struct {
 	APIKeys      []string
 	WhitelistIPs []string
 	CacheTTL     time.Duration
-	GeoDBPath    string // 🟢 BARU: Supaya lokasi DB dinamis
+	GeoDBPath    string
 	Storage      storage.LimiterStore
 	RedisClient  *redis.Client
+
+	// 🟢 BARU: Field untuk menampung Connection String Postgres
+	DatabaseDSN string
 }
 
 func Load() *AppConfig {
-	// 1. Coba load .env (Tapi jangan panic kalau gagal, karena di Docker kita pakai Env Vars langsung)
+	// 1. Coba load .env
 	if err := godotenv.Load(); err != nil {
 		log.Info().Msg(".env not found, using System Environment Variables")
 	}
@@ -32,7 +35,7 @@ func Load() *AppConfig {
 	// 2. Setup Redis
 	rdb := connectRedisClient()
 
-	// 3. Parsing Target URL (Comma Separated)
+	// 3. Parsing Target URL
 	rawTargets := getEnv("TARGET_URL", "http://localhost:8081")
 	targetList := strings.Split(rawTargets, ",")
 	for i := range targetList {
@@ -45,14 +48,17 @@ func Load() *AppConfig {
 		APIKeys:      strings.Split(getEnv("API_KEYS", ""), ","),
 		WhitelistIPs: strings.Split(getEnv("WHITELIST_IPS", ""), ","),
 		CacheTTL:     parseDuration(getEnv("CACHE_TTL", "60s")),
+		GeoDBPath:    getEnv("GEOIP_DB_PATH", "configs/geoip/GeoLite2-City.mmdb"),
 
-		// 🟢 BARU: Default path mengarah ke folder configs/geoip yang baru kita buat
-		GeoDBPath: getEnv("GEOIP_DB_PATH", "configs/geoip/GeoLite2-City.mmdb"),
+		// 🟢 BARU: Load DSN dari .env (Default value disesuaikan dengan standar lokal)
+		DatabaseDSN: getEnv("DATABASE_DSN", "host=localhost user=postgres password=root dbname=api_guardian port=5432 sslmode=disable TimeZone=Asia/Jakarta"),
 
-		Storage:     storage.NewRedisAdapter(rdb),
 		RedisClient: rdb,
+		Storage:     storage.NewRedisAdapter(rdb),
 	}
 }
+
+// --- HELPER FUNCTIONS (Tidak ada perubahan, tetap pakai logika Bos yang sudah mantap) ---
 
 func getEnv(key, fallback string) string {
 	if value, ok := os.LookupEnv(key); ok {
@@ -74,17 +80,16 @@ func connectRedisClient() *redis.Client {
 	addr := getEnv("REDIS_ADDR", "localhost:6379")
 	rdb := redis.NewClient(&redis.Options{
 		Addr:            addr,
-		MaxRetries:      10,               // Naikkan jumlah percobaan otomatis
-		MinRetryBackoff: 1 * time.Second,  // Jeda antar percobaan lebih santai
-		DialTimeout:     15 * time.Second, // Kasih waktu lebih lama buat ngetok pintu
+		MaxRetries:      10,
+		MinRetryBackoff: 1 * time.Second,
+		DialTimeout:     15 * time.Second,
 		PoolSize:        50,
 		ConnMaxIdleTime: 5 * time.Minute,
 	})
 
-	// --- PROTEKSI STARTUP: Lebih sabar menunggu ---
+	// Retry Logic (Biarkan tetap ada, ini bagus buat stability)
 	var err error
-	for i := 0; i < 7; i++ { // Coba 7 kali
-		// Naikkan dari 5s ke 10s 👇
+	for i := 0; i < 7; i++ {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		err = rdb.Ping(ctx).Err()
 		cancel()
@@ -94,7 +99,7 @@ func connectRedisClient() *redis.Client {
 			return rdb
 		}
 		log.Warn().Msgf("Waiting Redis (retry %d/7)... error: %v", i+1, err)
-		time.Sleep(3 * time.Second) // Tunggu 3 detik sebelum coba lagi
+		time.Sleep(3 * time.Second)
 	}
 
 	log.Error().Err(err).Msg("Fail to connect Redis (System running without cache)")

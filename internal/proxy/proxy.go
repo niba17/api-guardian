@@ -118,10 +118,10 @@ func NewLoadBalancer(targets []string) (*LoadBalancer, error) {
 
 			if err.Error() == "circuit breaker is OPEN" {
 				w.WriteHeader(http.StatusServiceUnavailable) // 503
-				w.Write([]byte(`{"error": "Backend sedang istirahat (Circuit Open)"}`))
+				w.Write([]byte(`{"error": "Backend is resting (Circuit Open)"}`))
 			} else {
 				w.WriteHeader(http.StatusBadGateway) // 502
-				w.Write([]byte(`{"error": "Backend tidak bisa dihubungi"}`))
+				w.Write([]byte(`{"error": "Can't connect to Backend"}`))
 			}
 		}
 

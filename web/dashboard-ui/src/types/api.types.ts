@@ -10,6 +10,12 @@ export interface SecurityLog {
   city: string;
   is_blocked: boolean;
   threat_type?: string;
+  threat_details?: string;
+  user_agent?: string;
+  browser?: string;
+  os?: string;
+  is_bot?: boolean;
+  body?: string;
 }
 
 export interface SystemStats {

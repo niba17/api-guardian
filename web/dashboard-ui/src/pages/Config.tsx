@@ -1,10 +1,10 @@
 import { useState, useEffect } from "react";
 import MainLayout from "../components/layout/MainLayout";
 import Switch from "../components/ui/Switch";
-import SettingsSkeleton from "../features/dashboard/components/SettingsSkeleton";
+import SettingsSkeleton from "../features/config/components/ConfigSkeleton";
 import { Shield, Globe, Save, Activity } from "lucide-react";
 
-export default function Settings() {
+export default function Config() {
   const [loading, setLoading] = useState(true);
   const [config, setConfig] = useState({
     wafEnabled: true,

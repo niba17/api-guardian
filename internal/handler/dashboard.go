@@ -1,64 +1,76 @@
 package handler
 
 import (
-	"context"
+	"api-guardian/internal/middleware"
 	"encoding/json"
 	"net/http"
 
 	"github.com/redis/go-redis/v9"
+	"gorm.io/gorm"
 )
 
-// Kita buat struct agar bisa memegang koneksi Redis
 type DashboardHandler struct {
 	Redis *redis.Client
+	DB    *gorm.DB
 }
 
-func NewDashboardHandler(rdb *redis.Client) *DashboardHandler {
-	return &DashboardHandler{Redis: rdb}
+func NewDashboardHandler(rdb *redis.Client, db *gorm.DB) *DashboardHandler {
+	return &DashboardHandler{
+		Redis: rdb,
+		DB:    db,
+	}
 }
 
-// --- HANDLER 1: Statistik Ringkas (Dari Redis) ---
+// --- HANDLER 1: Statistik Ringkas (SEKARANG DARI POSTGRES) ---
 func (h *DashboardHandler) GetDashboardStats(w http.ResponseWriter, r *http.Request) {
 	setupCORS(&w)
-	ctx := context.Background()
 
-	// Ambil data dari Redis (Otomatis 0 jika kunci tidak ada)
-	total, _ := h.Redis.Get(ctx, "stats:total_requests").Int64()
-	blocked, _ := h.Redis.Get(ctx, "stats:blocked_requests").Int64()
-	uniqueIPs, _ := h.Redis.SCard(ctx, "stats:unique_ips").Result()
+	var totalReq int64
+	var blockedReq int64
+	var uniqueIPs int64
+	var avgLatency float64
+
+	// 1. Hitung Total Requests (SELECT COUNT(*) FROM security_logs)
+	h.DB.Model(&middleware.SecurityLog{}).Count(&totalReq)
+
+	// 2. Hitung Blocked Requests (WHERE is_blocked = true)
+	h.DB.Model(&middleware.SecurityLog{}).Where("is_blocked = ?", true).Count(&blockedReq)
+
+	// 3. Hitung Unique IPs (SELECT COUNT(DISTINCT ip))
+	h.DB.Model(&middleware.SecurityLog{}).Distinct("ip").Count(&uniqueIPs)
+
+	// 4. Hitung Rata-rata Latency (SELECT AVG(latency))
+	// Result scan ke float64, handle kalau null (data kosong)
+	h.DB.Model(&middleware.SecurityLog{}).Select("COALESCE(AVG(latency), 0)").Scan(&avgLatency)
 
 	stats := map[string]interface{}{
-		"total_requests":   total,
-		"blocked_requests": blocked,
+		"total_requests":   totalReq,
+		"blocked_requests": blockedReq,
 		"unique_ips":       uniqueIPs,
-		"avg_latency":      "15ms", // Ini bisa dihitung dinamis nanti
+		"avg_latency":      int64(avgLatency), // Konversi ke int biar rapi (misal: 15ms)
 	}
 
 	json.NewEncoder(w).Encode(stats)
 }
 
-// --- HANDLER 2: Log Terbaru (Dari Redis List) ---
+// --- HANDLER 2: Log Terbaru (Tetap Sama) ---
 func (h *DashboardHandler) GetRecentLogs(w http.ResponseWriter, r *http.Request) {
 	setupCORS(&w)
-	ctx := context.Background()
 
-	// Ambil 50 log terbaru dari Redis List "stats:recent_logs"
-	val, err := h.Redis.LRange(ctx, "stats:recent_logs", 0, 49).Result()
+	var logs []middleware.SecurityLog
 
-	var logs []interface{}
-	for _, item := range val {
-		var l interface{}
-		json.Unmarshal([]byte(item), &l)
-		logs = append(logs, l)
-	}
+	// Ambil 100 log terakhir
+	result := h.DB.Order("timestamp desc").Limit(100).Find(&logs)
 
-	if err != nil || logs == nil {
-		logs = []interface{}{}
+	if result.Error != nil {
+		json.NewEncoder(w).Encode([]interface{}{})
+		return
 	}
 
 	json.NewEncoder(w).Encode(logs)
 }
 
+// --- UTILS ---
 func setupCORS(w *http.ResponseWriter) {
 	(*w).Header().Set("Content-Type", "application/json")
 	(*w).Header().Set("Access-Control-Allow-Origin", "*")

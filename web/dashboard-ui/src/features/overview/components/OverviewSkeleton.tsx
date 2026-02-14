@@ -1,6 +1,6 @@
 import Skeleton from "../../../components/ui/Skeleton";
 
-export default function DashboardSkeleton() {
+export default function OverviewSkeleton() {
   return (
     <div className="space-y-8">
       {/* 1. Stats Cards Skeleton (5 Kolom) */}

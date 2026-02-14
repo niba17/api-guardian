@@ -12,6 +12,9 @@ func APIKeyValidator(validKeys []string, next http.Handler) http.Handler {
 		clientKey := r.Header.Get("X-API-KEY")
 
 		if clientKey == "" {
+			// 👇 Tambahkan Header untuk Logger
+			w.Header().Set("X-Guardian-WAF-Reason", "Missing API Key")
+
 			log.Warn().Str("module", "auth").Str("ip", r.RemoteAddr).Msg("Missing API Key")
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
@@ -28,6 +31,9 @@ func APIKeyValidator(validKeys []string, next http.Handler) http.Handler {
 		}
 
 		if !isValid {
+			// 👇 Tambahkan Header untuk Logger
+			w.Header().Set("X-Guardian-WAF-Reason", "Invalid API Key Attempt")
+
 			log.Warn().Str("module", "auth").Str("ip", r.RemoteAddr).Msg("Invalid API Key")
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusForbidden)

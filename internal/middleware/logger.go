@@ -2,115 +2,66 @@ package middleware
 
 import (
 	"bytes"
-	"context"
-	"encoding/json"
 	"io"
 	"net"
 	"net/http"
-	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/oschwald/geoip2-golang"
 	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog/log"
+	"gorm.io/gorm"
 )
 
-var serverHostname, _ = os.Hostname()
+// --- KONFIGURASI PII MASKING ---
 
-// --- STRUKTUR DATA (Shared dengan Handler) ---
-
+// --- STRUKTUR DATA ---
 type SecurityLog struct {
-	ID         string `json:"id"`
-	Timestamp  string `json:"timestamp"`
-	IP         string `json:"ip"`
-	Method     string `json:"method"`
-	Path       string `json:"path"`
-	Status     int    `json:"status"`
-	Latency    int64  `json:"latency"`
-	Country    string `json:"country"`
-	City       string `json:"city"`
-	IsBlocked  bool   `json:"is_blocked"`
-	ThreatType string `json:"threat_type,omitempty"`
+	ID            string    `gorm:"primaryKey;type:uuid" json:"id"`
+	Timestamp     time.Time `gorm:"index" json:"timestamp"`
+	IP            string    `gorm:"size:50" json:"ip"`
+	Method        string    `gorm:"size:10" json:"method"`
+	Path          string    `json:"path"`
+	Status        int       `json:"status"`
+	Latency       int64     `json:"latency"`
+	Country       string    `gorm:"size:100" json:"country"`
+	City          string    `gorm:"size:100" json:"city"`
+	UserAgent     string    `json:"user_agent"`
+	Browser       string    `gorm:"size:50" json:"browser"`
+	OS            string    `gorm:"size:50" json:"os"`
+	IsBot         bool      `json:"is_bot"`
+	IsBlocked     bool      `gorm:"index" json:"is_blocked"`
+	ThreatType    string    `gorm:"size:50" json:"threat_type"`
+	ThreatDetails string    `gorm:"size:255" json:"threat_details"`
+	// 👇 KOLOM BARU: BODY (Tipe Text biar muat banyak)
+	Body string `gorm:"type:text" json:"body"`
 }
 
-type DashboardStats struct {
-	TotalRequests   int64  `json:"total_requests"`
-	BlockedRequests int64  `json:"blocked_requests"`
-	UniqueIPs       int    `json:"unique_ips"`
-	AvgLatency      string `json:"avg_latency"`
-}
-
-// --- MEMORY STORE (Internal) ---
-var (
-	statsMutex sync.RWMutex
-	totalReq   int64
-	blockedReq int64
-	uniqueIPs  = make(map[string]bool)
-	recentLogs []SecurityLog
-)
-
-// --- PUBLIC ACCESSORS (Untuk Handler) ---
-
-func GetDashboardStats() DashboardStats {
-	statsMutex.RLock()
-	defer statsMutex.RUnlock()
-
-	return DashboardStats{
-		TotalRequests:   totalReq,
-		BlockedRequests: blockedReq,
-		UniqueIPs:       len(uniqueIPs),
-		AvgLatency:      "15ms",
-	}
-}
-
-func GetRecentLogs() []SecurityLog {
-	statsMutex.RLock()
-	defer statsMutex.RUnlock()
-
-	// Copy slice agar aman
-	logsCopy := make([]SecurityLog, len(recentLogs))
-	copy(logsCopy, recentLogs)
-	return logsCopy
-}
-
-// --- INTERNAL HELPERS ---
-
-func saveToMemory(logEntry SecurityLog) {
-	statsMutex.Lock()
-	defer statsMutex.Unlock()
-
-	// Update Stats
-	totalReq++
-	if logEntry.IsBlocked {
-		blockedReq++
-	}
-	uniqueIPs[logEntry.IP] = true
-
-	// Update Logs (Prepend)
-	recentLogs = append([]SecurityLog{logEntry}, recentLogs...)
-	// Keep only last 50
-	if len(recentLogs) > 50 {
-		recentLogs = recentLogs[:50]
-	}
-}
+// internal/middleware/logger.go
 
 func GetIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		host = r.RemoteAddr
+	// 1. Cek header dari Proxy Docker (X-Forwarded-For)
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		// Ambil IP pertama sebelum koma
+		return strings.TrimSpace(strings.Split(xff, ",")[0])
 	}
-	// Langsung sikat saja tanpa 'if', Go yang urus sisanya
-	host = strings.TrimPrefix(host, "[")
-	host = strings.TrimSuffix(host, "]")
-	host = strings.TrimPrefix(host, "::ffff:")
 
-	return host
+	// 2. Cek Real-IP
+	if rip := r.Header.Get("X-Real-IP"); rip != "" {
+		return rip
+	}
+
+	// 3. Fallback terakhir
+	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
+
+	// Jika IP adalah loopback Docker, coba tandai agar kita tahu ini akses lokal
+	if ip == "172.18.0.1" {
+		return "windows-host-local" // Atau IP asli Windows Bos jika tahu
+	}
+	return ip
 }
-
-// --- MIDDLEWARE UTAMA ---
 
 type responseWriter struct {
 	http.ResponseWriter
@@ -128,18 +79,33 @@ func (rw *responseWriter) Write(b []byte) (int, error) {
 	return rw.ResponseWriter.Write(b)
 }
 
-func AuditLogger(geoDB *geoip2.Reader, rdb *redis.Client, next http.Handler) http.Handler {
+// --- MIDDLEWARE UTAMA ---
+func AuditLogger(geoDB *geoip2.Reader, rdb *redis.Client, db *gorm.DB, next http.Handler) http.Handler {
+
+	// Auto Migrate akan menambahkan kolom 'body' secara otomatis
+	if db != nil {
+		if err := db.AutoMigrate(&SecurityLog{}); err != nil {
+			log.Error().Err(err).Msg("Gagal migrasi database")
+		}
+	}
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		reqID := uuid.New().String()
-		w.Header().Set("X-Request-ID", reqID)
 
-		var reqBody []byte
-		var reqSize int64
-		if r.Body != nil {
-			reqBody, _ = io.ReadAll(r.Body)
-			r.Body = io.NopCloser(bytes.NewBuffer(reqBody))
-			reqSize = int64(len(reqBody))
+		// --- 1. BACA BODY (Hati-hati di sini!) ---
+		var bodyString string
+		// Hanya baca body jika method POST/PUT/PATCH
+		if r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodPatch {
+			// Baca seluruh body ke byte array
+			bodyBytes, err := io.ReadAll(r.Body)
+			if err == nil {
+				// Kembalikan body ke request agar bisa dibaca lagi oleh Handler berikutnya (PENTING!)
+				r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+
+				// Simpan ke string dan SENSOR!
+				bodyString = MaskPII(string(bodyBytes))
+			}
 		}
 
 		wrapped := &responseWriter{
@@ -149,21 +115,20 @@ func AuditLogger(geoDB *geoip2.Reader, rdb *redis.Client, next http.Handler) htt
 		}
 
 		next.ServeHTTP(wrapped, r)
-		duration := time.Since(start)
 
+		duration := time.Since(start)
 		clientIP := GetIP(r)
 
-		// GeoIP Logic
+		// LOGIC GEOIP: Gunakan IP dummy jika akses lokal (karena IP lokal gak ada petanya)
 		targetIP := clientIP
-		if clientIP == "::1" || clientIP == "127.0.0.1" || strings.HasPrefix(clientIP, "172.") {
-			targetIP = "180.252.173.1" // Telkomsel Dummy
+		if clientIP == "127.0.0.1" || strings.HasPrefix(clientIP, "172.") {
+			targetIP = "180.252.173.1" // Dummy IP Jakarta
 		}
 
 		countryName := "Unknown"
 		cityName := "Unknown"
 		if geoDB != nil {
-			ipParsed := net.ParseIP(targetIP)
-			if ipParsed != nil {
+			if ipParsed := net.ParseIP(targetIP); ipParsed != nil {
 				if record, err := geoDB.City(ipParsed); err == nil {
 					countryName = record.Country.Names["en"]
 					cityName = record.City.Names["en"]
@@ -171,87 +136,106 @@ func AuditLogger(geoDB *geoip2.Reader, rdb *redis.Client, next http.Handler) htt
 			}
 		}
 
-		// Security Logic - Lebih rapi pakai switch
+		uaString := r.UserAgent()
+		browser := "Other"
+		os := "Other"
+		isBot := false
+
+		// Logic Deteksi Sederhana (Bisa ditingkatkan pakai library 'ua-parser')
+		lowUA := strings.ToLower(uaString)
+		if strings.Contains(lowUA, "chrome") {
+			browser = "Chrome"
+		}
+		if strings.Contains(lowUA, "firefox") {
+			browser = "Firefox"
+		}
+		if strings.Contains(lowUA, "safari") && !strings.Contains(lowUA, "chrome") {
+			browser = "Safari"
+		}
+
+		if strings.Contains(lowUA, "windows") {
+			os = "Windows"
+		}
+		if strings.Contains(lowUA, "macintosh") {
+			os = "MacOS"
+		}
+		if strings.Contains(lowUA, "android") {
+			os = "Android"
+		}
+		if strings.Contains(lowUA, "iphone") {
+			os = "iOS"
+		}
+
+		// Deteksi Bot
+		if strings.Contains(lowUA, "bot") || strings.Contains(lowUA, "spider") || strings.Contains(lowUA, "crawler") {
+			isBot = true
+		}
+
+		// --- THREAT ANALYSIS (Update Jalur Header) ---
 		isBlocked := wrapped.statusCode >= 400
 		threatType := "None"
+		threatDetails := "-"
 
-		switch wrapped.statusCode {
-		case http.StatusTooManyRequests:
-			threatType = "Rate Limit"
-		case http.StatusForbidden:
-			threatType = "Access Denied"
-		case http.StatusBadRequest:
-			threatType = "WAF Block"
+		if isBlocked {
+			// 1. Cek apakah ada pesan spesifik dari WAF di header
+			wafReason := wrapped.Header().Get("X-Guardian-WAF-Reason")
+
+			if wafReason != "" {
+				threatType = "WAF"
+				threatDetails = wafReason
+			} else {
+				// 2. Fallback logic lama Bos
+				switch wrapped.statusCode {
+				case 429:
+					threatType = "Rate Limit"
+				case 401:
+					threatType = "Auth"
+				case 403:
+					threatType = "Access Denied"
+				case 503:
+					threatType = "Circuit Breaker"
+				default:
+					threatType = "SystemError"
+				}
+			}
 		}
 
-		// 1. Simpan ke Memori Dashboard
+		// --- SIMPAN KE DB ---
 		logData := SecurityLog{
-			ID:         reqID,
-			Timestamp:  time.Now().Format(time.RFC3339),
-			IP:         clientIP,
-			Method:     r.Method,
-			Path:       r.URL.Path,
-			Status:     wrapped.statusCode,
-			Latency:    duration.Milliseconds(),
-			Country:    countryName,
-			City:       cityName,
-			IsBlocked:  isBlocked,
-			ThreatType: threatType,
+			ID:        reqID,
+			Timestamp: time.Now(),
+			IP:        clientIP,
+			Method:    r.Method,
+			Path:      r.URL.Path,
+			Status:    wrapped.statusCode,
+			Latency:   duration.Milliseconds(),
+			Country:   countryName,
+			City:      cityName, UserAgent: uaString,
+			Browser:       browser,
+			OS:            os,
+			IsBot:         isBot,
+			IsBlocked:     isBlocked,
+			ThreatType:    threatType,
+			ThreatDetails: threatDetails, // 👈 Simpan detailnya di sini
+			Body:          bodyString,
 		}
-		go saveToMemory(logData)
 
-		// --- 🚀 PROSES ANTI-AMNESIA (REDIS) ---
-		// --- 🚀 PROSES ANTI-AMNESIA (REDIS) ---
-		go func(data SecurityLog, client *redis.Client) {
-			if client == nil {
-				return
+		go func() {
+			if db != nil {
+				if err := db.Create(&logData).Error; err != nil {
+					log.Error().Err(err).Msg("Gagal simpan log ke Database")
+				}
 			}
+		}()
 
-			// 1. Cukup buat SATU context saja untuk seluruh proses ini
-			// Gunakan 10 detik agar lebih tahan banting di Windows
-			bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
+		// --- LOG KE CONSOLE (Biar Bos bisa lihat langsung) ---
+		logger := log.Info()
+		if isBlocked {
+			logger = log.Warn()
+		}
 
-			// 2. Cek koneksi
-			if err := client.Ping(bgCtx).Err(); err != nil {
-				log.Error().Err(err).Msg("Redis not respond while updating stats")
-				return
-			}
-
-			// 3. Jalankan Pipeline
-			pipe := client.Pipeline()
-
-			pipe.Incr(bgCtx, "stats:total_requests")
-			if data.IsBlocked {
-				pipe.Incr(bgCtx, "stats:blocked_requests")
-			}
-			pipe.SAdd(bgCtx, "stats:unique_ips", data.IP)
-
-			logJSON, _ := json.Marshal(data)
-			pipe.LPush(bgCtx, "stats:recent_logs", logJSON)
-			pipe.LTrim(bgCtx, "stats:recent_logs", 0, 49)
-
-			// 4. Eksekusi
-			if _, err := pipe.Exec(bgCtx); err != nil {
-				log.Error().Err(err).Msg("Failed to execute Redis pipeline")
-			}
-		}(logData, rdb)
-
-		// 2. Log ke Console/File (Zerolog)
-		// MaskPII dipanggil dari privacy.go (satu package)
-		maskedReq := MaskPII(string(reqBody))
-		maskedRes := MaskPII(wrapped.body.String())
-
-		log.Info().
-			Str("req_id", reqID).
-			Str("ip", clientIP).
-			Str("method", r.Method).
-			Int("status", wrapped.statusCode).
-			Int64("latency_ms", duration.Milliseconds()).
-			Int64("req_size", reqSize). // Fix: reqSize sekarang dipakai
-			Bool("blocked", isBlocked).
-			Interface("req_body", maskedReq).
-			Interface("res_body", maskedRes).
-			Msg("Audit Log")
+		logger.
+			Interface("details", logData).
+			Msg("Audit Log Entry")
 	})
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"api-guardian/internal/config"
+	"api-guardian/internal/database" // 👈 Import database
 	"api-guardian/internal/handler"
 	"api-guardian/internal/middleware"
 	"api-guardian/internal/proxy"
@@ -20,11 +21,8 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// Main function
 func main() {
-	// 👇 TAMBAHKAN INI: Paksa log level ke DEBUG
 	zerolog.SetGlobalLevel(zerolog.DebugLevel)
-
 	setupLogger()
 
 	// 1. Load Config
@@ -34,7 +32,11 @@ func main() {
 	// a. Redis
 	cacheUC := usecase.NewCacheUsecase(cfg.RedisClient, cfg.CacheTTL)
 
-	// b. GeoIP Database
+	// b. Postgres Database (🔥 NEW)
+	// Pastikan variable DatabaseDSN sudah ada di config.go Bos yang terakhir
+	db := database.InitDB(cfg.DatabaseDSN)
+
+	// c. GeoIP Database
 	geoDB, err := geoip2.Open(cfg.GeoDBPath)
 	if err != nil {
 		log.Warn().Err(err).Str("path", cfg.GeoDBPath).Msg("Fail to load GeoIP Database")
@@ -49,36 +51,32 @@ func main() {
 		log.Fatal().Err(err).Msg("Target URL Error")
 	}
 
-	// 4. Setup Middleware Chain (Pipeline)
+	// 4. Setup Middleware Chain
 	var secureHandler http.Handler = lb
 
-	// Urutan: Dalam ke Luar
 	secureHandler = middleware.SmartCache(cacheUC, secureHandler)
 	secureHandler = middleware.APIKeyValidator(cfg.APIKeys, secureHandler)
 	secureHandler = middleware.BasicWAF(secureHandler)
 	secureHandler = middleware.PrometheusMiddleware(secureHandler)
 	secureHandler = middleware.RateLimiter(cfg.Storage, cfg.WhitelistIPs, secureHandler)
 
-	// Cukup SATU AuditLogger saja di paling luar
-	secureHandler = middleware.AuditLogger(geoDB, cfg.RedisClient, secureHandler)
+	// 👇 Pass 'db' ke AuditLogger
+	secureHandler = middleware.AuditLogger(geoDB, cfg.RedisClient, db, secureHandler)
 
-	// 5. Setup Mux (Router)
+	// 5. Setup Router
 	mux := http.NewServeMux()
 
-	// --- Endpoint Utilitas ---
 	mux.HandleFunc("/status", handler.HealthCheck(cfg.Storage))
 	mux.Handle("/metrics", promhttp.Handler())
 
-	// --- ENDPOINT DASHBOARD (API untuk React) ---
-	// 1. Inisialisasi Handler dengan Redis
-	dashHandler := handler.NewDashboardHandler(cfg.RedisClient)
+	// --- ENDPOINT DASHBOARD ---
+	// 👇 Pass 'db' ke Dashboard Handler
+	dashHandler := handler.NewDashboardHandler(cfg.RedisClient, db)
 
-	// 2. Daftarkan Endpoint (Gunakan Method dari dashHandler)
 	mux.HandleFunc("/api/dashboard/stats", dashHandler.GetDashboardStats)
 	mux.HandleFunc("/api/dashboard/logs", dashHandler.GetRecentLogs)
 
-	// --- Endpoint Utama (Proxy) ---
-	// PENTING: Handle "/" harus paling bawah agar tidak memakan path lain
+	// Endpoint Utama
 	mux.Handle("/", secureHandler)
 
 	// 6. Server Run
@@ -91,7 +89,7 @@ func main() {
 		log.Info().
 			Str("port", cfg.Port).
 			Int("backends", len(cfg.TargetURLs)).
-			Msg("API Guardian is standing guard")
+			Msg("API Guardian is standing guard (Powered by PostgreSQL)")
 
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatal().Err(err).Msg("Server failed")
@@ -110,8 +108,10 @@ func main() {
 }
 
 func setupLogger() {
+	// Logger file ini sekarang HANYA untuk debug aplikasi/system error
+	// Audit log keamanan sudah masuk ke PostgreSQL
 	fileLogger := &lumberjack.Logger{
-		Filename:   "logs/audit.log",
+		Filename:   "logs/app.log", // Ganti nama jadi app.log biar gak kecampur
 		MaxSize:    10,
 		MaxBackups: 3,
 		MaxAge:     28,

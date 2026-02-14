@@ -12,102 +12,74 @@ import (
 const (
 	LIMIT_PER_MINUTE = 20
 	MAX_VIOLATIONS   = 5
-	BAN_DURATION     = 1 * time.Hour
+	BAN_DURATION     = 24 * time.Hour
 )
 
 func RateLimiter(store storage.LimiterStore, whitelist []string, next http.Handler) http.Handler {
+	// Ambil config dari env atau gunakan default
+	refillRate := 0.33 // Default: 1 token tiap 3 detik
+	burstCapacity := 10
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
-		ip := GetIP(r) // Pastikan GetIP dari logger.go sudah bersih
+		ip := GetIP(r)
 
-		// [DEBUG] Cek IP yang masuk
-		// log.Debug().Str("ip", ip).Msg("🔍 RateLimiter: Checking Incoming Request")
+		// 1. CEK BLACKLIST (Prioritas Utama)
+		banKey := "blacklist:" + ip
+		if isBanned, _ := store.Exists(ctx, banKey); isBanned > 0 {
+			w.Header().Set("X-Guardian-Waf-Reason", "IP Permanently Banned")
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte(`{"error": "Banned"}`))
+			return
+		}
 
-		// 1. CEK WHITELIST (Jalur VVIP)
+		// 2. CEK WHITELIST
 		for _, allowed := range whitelist {
-			// Kita buang logika "["+ip+"]" karena GetIP sudah membersihkannya
-			if allowed == ip {
-				log.Info().Str("ip", ip).Msg("🛡️ RateLimiter: VVIP WHITELISTED (Bypass)")
+			if allowed != "" && allowed == ip {
 				next.ServeHTTP(w, r)
 				return
 			}
 		}
 
-		// 2. CEK BLACKLIST (Jalur Penjara)
-		banKey := "blacklist:" + ip
-		exists, err := store.Exists(ctx, banKey)
-		if err != nil {
-			log.Error().Err(err).Msg("RateLimiter: Redis Error Check Blacklist")
-			// Lanjut dulu kalau error cek ban, nanti dicek di limit
-		}
+		// 3. TOKEN BUCKET LOGIC 🛡️
+		limitKey := "bucket:" + ip
+		allowed, remaining, err := store.TakeToken(ctx, limitKey, 0, burstCapacity, refillRate)
 
-		if exists > 0 {
-			log.Warn().Str("ip", ip).Msg("RateLimiter: BLOCKED (User Banned)")
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusForbidden)
-			w.Write([]byte(`{"error": "Your IP banned for 1 hour"}`))
+		if err != nil {
+			log.Error().Err(err).Msg("REDIS ERROR: Fail-Closed")
+			w.WriteHeader(http.StatusServiceUnavailable)
 			return
 		}
 
-		// 3. RATE LIMITING (Jalur Hitung)
-		limitKey := "rate_limit:" + ip
-		count, err := store.Incr(ctx, limitKey)
+		// Header standar industri
+		w.Header().Set("X-RateLimit-Remaining", fmt.Sprintf("%d", remaining))
 
-		// [DEBUG] Tangkap jika Redis Error/Mati
-		if err != nil {
-			log.Error().Err(err).Msg("RateLimiter: REDIS ERROR on INCR (Fail Open)")
-			// Di sini lubangnya! Kalau Redis error, dia lolos.
-			// Untuk debugging, kita biarkan lolos tapi LOG-nya merah.
-			next.ServeHTTP(w, r)
-			return
-		}
-
-		// [DEBUG] Tampilkan counter saat ini
-		// log.Debug().Str("ip", ip).Int64("hits", count).Msg("📊 RateLimiter Counter")
-
-		// Set Expire untuk request pertama
-		if count == 1 {
-			store.Expire(ctx, limitKey, 1*time.Minute)
-		}
-
-		// 4. LOGIKA PELANGGARAN (Jalur Hukuman)
-		if count > LIMIT_PER_MINUTE {
+		if !allowed {
 			violationKey := "violation:" + ip
-			violationCount, _ := store.Incr(ctx, violationKey)
+			vCount, _ := store.Incr(ctx, violationKey)
 
-			if violationCount == 1 {
+			// 👇 TAMBAHKAN INI LAGI, BOS! Biar violation gak abadi
+			if vCount == 1 {
 				store.Expire(ctx, violationKey, 10*time.Minute)
 			}
 
-			remainingLives := int64(MAX_VIOLATIONS) - violationCount
+			if vCount >= MAX_VIOLATIONS {
+				w.Header().Set("X-Guardian-WAF-Reason", "Ban Hammer Executed")
+				log.Error().Str("ip", ip).Msg("BAN HAMMER EXECUTED!")
 
-			log.Warn().Str("ip", ip).
-				Int64("hits", count).
-				Int64("violations", violationCount).
-				Msg("RateLimiter: OVER LIMIT")
+				// Tulis secara sinkron, jangan pakai goroutine biar pasti tersimpan
+				store.Set(ctx, banKey, "banned", BAN_DURATION)
 
-			if violationCount >= MAX_VIOLATIONS {
-				log.Error().Str("ip", ip).Msg("RateLimiter: BAN HAMMER EXECUTED!")
-
-				// Tulis Blacklist
-				err := store.Set(ctx, banKey, "banned", BAN_DURATION)
-				if err != nil {
-					log.Error().Err(err).Msg("RateLimiter: Fail to write Blacklist on Redis")
-				}
-
-				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusForbidden)
-				w.Write([]byte(`{"error": "Your IP is banned"}`))
+				w.Write([]byte(`{"error": "You are permanently banned"}`))
 				return
 			}
 
-			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("X-Guardian-Waf-Reason", "Rate Limit Exceeded (Token Bucket)")
 			w.WriteHeader(http.StatusTooManyRequests)
-			w.Write([]byte(fmt.Sprintf(`{"error": "Too many request, chances remaining: %d"}`, remainingLives)))
 			return
 		}
 
-		// Kalau aman, lanjut
 		next.ServeHTTP(w, r)
 	})
 }

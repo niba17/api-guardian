@@ -1,24 +1,49 @@
 version: "3.8"
 
 services:
-  # 1. Database Redis (Kotak Hitam Data)
+  # 1. Database Redis (Cache & Rate Limit)
   redis-db:
-    image: redis:7-alpine # 👈 Ganti jadi ini (Jauh lebih ringan)
+    image: redis:7-alpine
     container_name: guardian-redis
     command: ["redis-server", "--appendonly", "yes"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 3s # 👈 Lebih cepat ceknya
+      interval: 3s
       timeout: 2s
       retries: 10
     ports:
       - "6380:6379"
     volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
       - ../redis-data:/data
     networks:
       - guardian-net
 
-  # 2. Aplikasi API Guardian
+  # 2. Database PostgreSQL (Audit Logs)
+  postgres-db:
+    image: postgres:15-alpine
+    container_name: guardian-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: niba17
+      POSTGRES_DB: api_guardian
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s # 👈 Diperlonggar
+      timeout: 5s
+      retries: 10 # 👈 Ditambah (Total waktu tunggu ~100 detik)
+      start_period: 10s # 👈 Kasih bonus waktu di awal
+    ports:
+      - "5433:5432"
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - ../postgres-data:/var/lib/postgresql/data
+    networks:
+      - guardian-net
+
+  # 3. Aplikasi API Guardian
   api-guardian:
     build:
       context: ../
@@ -31,13 +56,18 @@ services:
     environment:
       - PORT=8080
       - REDIS_ADDR=redis-db:6379
+      # 👇 PASTIKAN: Tidak ada tanda kutip nyasar di akhir (Jakarta)
+      - DATABASE_DSN=host=postgres-db user=postgres password=niba17 dbname=api_guardian port=5432 sslmode=disable TimeZone=Asia/Jakarta
       - GEO_DB_PATH=/app/configs/geoip/GeoLite2-City.mmdb
-      - TARGET_URL=https://www.google.com
     volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
       - ../logs:/app/logs
     depends_on:
       redis-db:
-        condition: service_healthy # 👈 Tunggu Redis beneran siap
+        condition: service_healthy
+      postgres-db:
+        condition: service_healthy # 👈 Tunggu Postgres beneran 'Sehat'
     networks:
       - guardian-net
 
