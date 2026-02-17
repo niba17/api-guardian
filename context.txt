@@ -1,0 +1,18 @@
+Request (Client) 
+   ⬇️
+1. Router (Satpam & Resepsionis) 
+   📍 internal/delivery/http/router.go
+   ⬇️
+2. Middleware (Cek Tiket/Token)
+   📍 internal/delivery/http/middleware/
+   ⬇️
+3. Handler (Pelayan / Waiter)
+   📍 internal/delivery/http/handler/auth.go
+   ⬇️
+4. Usecase (Koki / Chef)
+   📍 internal/usecase/auth_usecase.go
+   ⬇️
+5. Repository (Gudang Bahan)
+   📍 internal/repository/user_repo.go
+   ⬇️
+Database (Postgres)

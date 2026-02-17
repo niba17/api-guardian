@@ -1,0 +1,38 @@
+# Binary files
+guardian-app
+main
+main.exe
+*.exe
+
+.vscode/
+.idea/
+
+node_modules/
+dist/
+.env.local
+.git
+.env
+
+# Logs
+logs/*.log
+
+vendor/  
+
+docs/
+step.txt
+test.http
+
+# Database Data
+postgres-data/
+redis-data/
+*.rdb
+*.aof
+dump.rd
+
+# Frontend (Sub-folder)
+web/dashboard-ui/node_modules/
+web/dashboard-ui/dist/
+web/dashboard-ui/.env.local
+
+# Databases & GeoIP (Opsional, biasanya .mmdb terlalu besar untuk Git)
+configs/geoip/*.mmdb 

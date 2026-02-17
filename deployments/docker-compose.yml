@@ -1,0 +1,72 @@
+services:
+  # 1. Database Redis (Cache & Rate Limit)
+  redis-db:
+    image: redis:7-alpine
+    container_name: guardian-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 2s
+      retries: 10
+    ports:
+      - "6380:6379"
+    volumes:
+      - ../redis-data:/data
+    networks:
+      - guardian-net
+
+  # 2. Database PostgreSQL (Audit Logs)
+  postgres-db:
+    image: postgres:15-alpine
+    container_name: guardian-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: niba17
+      POSTGRES_DB: api_guardian
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    ports:
+      - "5433:5432"
+    volumes:
+      - ../postgres-data:/var/lib/postgresql/data
+    networks:
+      - guardian-net
+
+  # 3. Aplikasi API Guardian
+  api-guardian:
+    build:
+      context: ../
+      dockerfile: deployments/Dockerfile
+      # network: host
+    container_name: api-guardian-app
+    env_file:
+      - ../.env
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - REDIS_ADDR=redis-db:6379
+      # 👇 GANTI INI JADI 'UTC'
+      - DATABASE_DSN=host=postgres-db user=postgres password=niba17 dbname=api_guardian port=5432 sslmode=disable TimeZone=UTC
+      - GEO_DB_PATH=/app/configs/geoip/GeoLite2-City.mmdb
+      - TARGET_URL=https://www.google.com
+    volumes:
+      - ../logs:/app/logs
+    depends_on:
+      redis-db:
+        condition: service_healthy
+      postgres-db:
+        condition: service_healthy
+    networks:
+      - guardian-net
+
+networks:
+  guardian-net:
+    driver: bridge
+    driver_opts:
+      # TETAP DI-KEEP: Supaya 'go mod download' di backend tidak kena packet drop ISP
+      com.docker.network.driver.mtu: "1400"

@@ -1,0 +1,8 @@
+# Abaikan folder frontend sepenuhnya saat build backend
+web/
+# Abaikan folder data
+postgres-data/
+redis-data/
+# Abaikan log
+logs/
+.git/
