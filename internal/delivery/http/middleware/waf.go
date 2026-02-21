@@ -2,7 +2,6 @@ package middleware
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -13,27 +12,24 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// 1. SIMPLE STRINGS (Cek cepat pakai strings.Contains)
+// 1. SIMPLE STRINGS
 var simpleSqlPatterns = []string{
 	"UNION SELECT", "DROP TABLE", "INSERT INTO", "DELETE FROM",
 	"xp_cmdshell", "exec(", "--", "/*", "*/",
 }
 
-// 2. REGEX PATTERNS (Cek pola rumit yang bervariasi spasi/kapital)
-// Gunakan `MustCompile` biar kalau regex salah, server langsung panic di awal (fail fast)
+// 2. REGEX PATTERNS
 var regexSqlPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)(union\s+select)`),     // UNION SELECT (case insensitive + spasi bebas)
-	regexp.MustCompile(`(?i)(select\s+.*\s+from)`), // SELECT ... FROM
-	regexp.MustCompile(`(?i)(insert\s+into)`),      // INSERT INTO
-	regexp.MustCompile(`(?i)(update\s+.*\s+set)`),  // UPDATE SET
-
-	// 👇 INI JUARA KITA: Menangkap Variasi OR 1=1
-	regexp.MustCompile(`(?i)('\s*or\s*)`),         // ' OR (dengan spasi fleksibel)
-	regexp.MustCompile(`(?i)(or\s+1\s*=\s*1)`),    // OR 1=1
-	regexp.MustCompile(`(?i)(1\s*=\s*1)`),         // 1=1
-	regexp.MustCompile(`(?i)('\s*=\s*')`),         // '='
-	regexp.MustCompile(`(?i)(['";])`),             // Karakter pemutus query
-	regexp.MustCompile(`(?i)(benchmark|sleep)\(`), // Time-based SQL Injection
+	regexp.MustCompile(`(?i)(union\s+select)`),
+	regexp.MustCompile(`(?i)(select\s+.*\s+from)`),
+	regexp.MustCompile(`(?i)(insert\s+into)`),
+	regexp.MustCompile(`(?i)(update\s+.*\s+set)`),
+	regexp.MustCompile(`(?i)('\s*or\s*)`),
+	regexp.MustCompile(`(?i)(or\s+1\s*=\s*1)`),
+	regexp.MustCompile(`(?i)(1\s*=\s*1)`),
+	regexp.MustCompile(`(?i)('\s*=\s*')`),
+	regexp.MustCompile(`(?i)(['";])`),
+	regexp.MustCompile(`(?i)(benchmark|sleep)\(`),
 }
 
 var xssPatterns = []string{
@@ -57,17 +53,11 @@ func BasicWAF(next http.Handler) http.Handler {
 			return
 		}
 
-		// Helper internal untuk mempermudah blocking dengan context
-		triggerBlock := func(reason string) {
-			// 👇 KUNCI UTAMA: Masukkan alasan ke Context agar dibaca logger.go
-			ctx := context.WithValue(r.Context(), "waf_reason", reason)
-			blockRequest(w, r.WithContext(ctx), reason)
-		}
-
 		// 1. Cek Path
 		decodedPath, _ := url.PathUnescape(r.URL.Path)
 		if isMalicious(strings.ToLower(decodedPath)) {
-			triggerBlock("Path Traversal Detected")
+			// 🚀 Langsung panggil blockRequest dan return untuk stop eksekusi
+			blockRequest(w, r, "Path Traversal Detected")
 			return
 		}
 
@@ -75,12 +65,12 @@ func BasicWAF(next http.Handler) http.Handler {
 		ua := strings.ToLower(r.UserAgent())
 		for _, badBot := range badUserAgents {
 			if strings.Contains(ua, badBot) {
-				triggerBlock("Security Scanner: " + badBot)
+				blockRequest(w, r, "Security Scanner: "+badBot)
 				return
 			}
 		}
 
-		// 3. Cek URL Query (Kita buat lebih spesifik pesannya)
+		// 3. Cek URL Query
 		decodedQuery, err := url.QueryUnescape(r.URL.RawQuery)
 		targetQuery := r.URL.RawQuery
 		if err == nil {
@@ -89,7 +79,6 @@ func BasicWAF(next http.Handler) http.Handler {
 
 		if isMalicious(targetQuery) {
 			reason := "Malicious Query Detected"
-			// Deteksi spesifik untuk ThreatDetails
 			upperQuery := strings.ToUpper(targetQuery)
 			if strings.Contains(upperQuery, "SELECT") || strings.Contains(upperQuery, "OR 1=1") {
 				reason = "SQL Injection Attempt"
@@ -97,17 +86,21 @@ func BasicWAF(next http.Handler) http.Handler {
 				reason = "XSS Attack Attempt"
 			}
 
-			triggerBlock(reason)
+			blockRequest(w, r, reason)
 			return
 		}
 
-		// 4. Cek Body
+		// 4. Cek Body (Dengan Limit Memori! 🛡️)
 		if r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodPatch {
-			bodyBytes, err := io.ReadAll(r.Body)
+			// 🚀 PERBAIKAN: Baca maksimal 1MB (1048576 bytes) saja dari body untuk diinspeksi
+			// Ini mencegah Hacker melempar file ISO 5GB untuk bikin server OOM
+			bodyBytes, err := io.ReadAll(io.LimitReader(r.Body, 1048576))
+
 			if err == nil {
+				// Kembalikan body seperti semula agar bisa dibaca Handler berikutnya
 				r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 				if isMalicious(string(bodyBytes)) {
-					triggerBlock("Malicious Payload in Body")
+					blockRequest(w, r, "Malicious Payload in Body")
 					return
 				}
 			}
@@ -117,33 +110,27 @@ func BasicWAF(next http.Handler) http.Handler {
 	})
 }
 
-// Fungsi Helper Utama
 func isMalicious(input string) bool {
-	// Normalisasi input (lowercase) untuk string matching biasa
 	lowerInput := strings.ToLower(input)
 
-	// A. Cek SQL Injection (Simple String)
 	for _, pattern := range simpleSqlPatterns {
 		if strings.Contains(lowerInput, strings.ToLower(pattern)) {
 			return true
 		}
 	}
 
-	// B. Cek SQL Injection (Regex - Case Insensitive sudah dihandle regex (?i))
 	for _, regex := range regexSqlPatterns {
-		if regex.MatchString(input) { // Pakai input asli (case sensitive matters for regex sometimes)
+		if regex.MatchString(input) {
 			return true
 		}
 	}
 
-	// C. Cek XSS
 	for _, pattern := range xssPatterns {
 		if strings.Contains(lowerInput, strings.ToLower(pattern)) {
 			return true
 		}
 	}
 
-	// D. Cek Path Traversal
 	for _, pattern := range pathTraversalPatterns {
 		if strings.Contains(lowerInput, strings.ToLower(pattern)) {
 			return true
@@ -154,10 +141,9 @@ func isMalicious(input string) bool {
 }
 
 func blockRequest(w http.ResponseWriter, r *http.Request, reason string) {
-	// 👇 TITIP PESAN DI HEADER (Agar Logger bisa baca meskipun Context-nya lepas)
+	// Header ini akan ditangkap oleh Logger yang berjalan sebelumnya di rantai middleware
 	w.Header().Set("X-Guardian-WAF-Reason", reason)
-
-	log.Warn().Str("reason", reason).Msg("WAF BLOCKED REQUEST")
+	log.Warn().Str("ip", GetIP(r)).Str("reason", reason).Msg("WAF BLOCKED REQUEST")
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusBadRequest)

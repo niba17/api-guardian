@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"net/http"
+	"regexp"
 	"strconv"
 	"time"
 
@@ -11,7 +12,6 @@ import (
 
 // --- DEFINISI METRICS ---
 
-// 1. Counter: Menghitung jumlah total request
 var (
 	httpRequestsTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
@@ -21,26 +21,47 @@ var (
 		[]string{"method", "path", "status"},
 	)
 
-	// 2. Histogram: Mengukur seberapa cepat (latency) request diproses
 	httpRequestDuration = promauto.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:    "api_guardian_request_duration_seconds",
 			Help:    "Duration of HTTP requests in seconds",
-			Buckets: prometheus.DefBuckets, // Bucket standar (0.005s, 0.01s, ..., 10s)
+			Buckets: prometheus.DefBuckets,
 		},
 		[]string{"method", "path"},
 	)
+
+	// Regex untuk menyamarkan angka (ID) atau UUID di dalam URL
+	// Contoh: /api/menus/123 -> /api/menus/:id
+	idRegex = regexp.MustCompile(`/[0-9a-fA-F-]+/?$|/[0-9]+`)
 )
 
-// responseWriterWrapper untuk menangkap Status Code
-type responseWriterWrapper struct {
-	http.ResponseWriter
-	statusCode int
+// Helper untuk mencegah Prometheus Cardinality Explosion
+func normalizePath(path string) string {
+	return idRegex.ReplaceAllString(path, "/:id")
 }
 
-func (rw *responseWriterWrapper) WriteHeader(code int) {
-	rw.statusCode = code
-	rw.ResponseWriter.WriteHeader(code)
+// 🚀 PERBAIKAN: responseWriterWrapper disamakan standar amannya dengan Logger
+type metricsResponseWriter struct {
+	http.ResponseWriter
+	statusCode int
+	written    bool
+}
+
+func (rw *metricsResponseWriter) WriteHeader(code int) {
+	if !rw.written {
+		rw.statusCode = code
+		rw.written = true
+		rw.ResponseWriter.WriteHeader(code)
+	}
+}
+
+// Tangkap status 200 implisit
+func (rw *metricsResponseWriter) Write(b []byte) (int, error) {
+	if !rw.written {
+		rw.statusCode = http.StatusOK
+		rw.written = true
+	}
+	return rw.ResponseWriter.Write(b)
 }
 
 // PrometheusMiddleware adalah "Petugas Sensus" yang mencatat data
@@ -48,20 +69,22 @@ func PrometheusMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 
-		// Bungkus ResponseWriter supaya kita bisa intip status code-nya nanti
-		wrapper := &responseWriterWrapper{ResponseWriter: w, statusCode: http.StatusOK}
+		// Bungkus ResponseWriter dengan aman
+		wrapper := &metricsResponseWriter{
+			ResponseWriter: w,
+			statusCode:     http.StatusOK, // Default ke 200
+		}
 
-		// Jalankan request ke middleware berikutnya
 		next.ServeHTTP(wrapper, r)
 
 		// --- SETELAH REQUEST SELESAI ---
 		duration := time.Since(start).Seconds()
 		status := strconv.Itoa(wrapper.statusCode)
 
-		// 1. Catat Durasi
-		httpRequestDuration.WithLabelValues(r.Method, r.URL.Path).Observe(duration)
+		// 🚀 Normalisasi URL sebelum masuk ke Prometheus
+		cleanPath := normalizePath(r.URL.Path)
 
-		// 2. Tambah Counter (sesuai method, path, dan status code)
-		httpRequestsTotal.WithLabelValues(r.Method, r.URL.Path, status).Inc()
+		httpRequestDuration.WithLabelValues(r.Method, cleanPath).Observe(duration)
+		httpRequestsTotal.WithLabelValues(r.Method, cleanPath, status).Inc()
 	})
 }

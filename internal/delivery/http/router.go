@@ -30,5 +30,12 @@ func NewRouter(
 		mux.Handle("GET /api/dashboard/logs", authMW(http.HandlerFunc(dashHandler.GetRecentLogs)))
 	}
 
+	// --- 3. Proxy / Backend Target 🚀 ---
+	// Semua request yang tidak terdaftar di atas akan masuk ke sini.
+	// Di sinilah API Guardian meneruskan traffic ke server asli Bos!
+	if secureChain != nil {
+		mux.Handle("/", secureChain)
+	}
+
 	return mux
 }

@@ -1,48 +1,47 @@
 package repository
 
 import (
-	"api-guardian/internal/domain"
+	"api-guardian/internal/domain/security_log"
+	"api-guardian/internal/domain/security_log/interfaces"
 
 	"gorm.io/gorm"
 )
-
-type SecurityLogRepository interface {
-	Save(log *domain.SecurityLog) error
-	GetStats() (map[string]interface{}, error)
-	GetRecent(limit int) ([]domain.SecurityLog, error)
-}
 
 type gormSecurityLogRepo struct {
 	db *gorm.DB
 }
 
-func NewSecurityLogRepository(db *gorm.DB) SecurityLogRepository {
+// Return-nya sekarang menggunakan interfaces.SecurityLogRepository
+func NewSecurityLogRepository(db *gorm.DB) interfaces.SecurityLogRepository {
 	return &gormSecurityLogRepo{db: db}
 }
 
-func (r *gormSecurityLogRepo) Save(log *domain.SecurityLog) error {
+func (r *gormSecurityLogRepo) Save(log *security_log.SecurityLog) error {
 	return r.db.Create(log).Error
 }
 
-func (r *gormSecurityLogRepo) GetStats() (map[string]interface{}, error) {
-	var totalReq, blockedReq, uniqueIPs int64
-	var avgLatency float64
+func (r *gormSecurityLogRepo) GetStats() (security_log.DashboardStats, error) {
+	var stats security_log.DashboardStats
+	var total, blocked, unique int64
+	var avg float64
 
-	r.db.Model(&domain.SecurityLog{}).Count(&totalReq)
-	r.db.Model(&domain.SecurityLog{}).Where("is_blocked = ?", true).Count(&blockedReq)
-	r.db.Model(&domain.SecurityLog{}).Distinct("ip").Count(&uniqueIPs)
-	r.db.Model(&domain.SecurityLog{}).Select("COALESCE(AVG(latency), 0)").Scan(&avgLatency)
+	// Query satu-satu untuk akurasi tinggi
+	r.db.Model(&security_log.SecurityLog{}).Count(&total)
+	r.db.Model(&security_log.SecurityLog{}).Where("is_blocked = ?", true).Count(&blocked)
+	r.db.Model(&security_log.SecurityLog{}).Distinct("ip").Count(&unique)
+	r.db.Model(&security_log.SecurityLog{}).Select("COALESCE(AVG(latency), 0)").Scan(&avg)
 
-	return map[string]interface{}{
-		"total_requests":   totalReq,
-		"blocked_requests": blockedReq,
-		"unique_ips":       uniqueIPs,
-		"avg_latency":      int64(avgLatency),
-	}, nil
+	stats.TotalRequests = int(total)
+	stats.TotalBlocked = int(blocked)
+	stats.TotalSuccess = int(total - blocked)
+	stats.UniqueIPs = int(unique)
+	stats.AvgLatency = int64(avg)
+
+	return stats, nil
 }
 
-func (r *gormSecurityLogRepo) GetRecent(limit int) ([]domain.SecurityLog, error) {
-	var logs []domain.SecurityLog
+func (r *gormSecurityLogRepo) GetRecent(limit int) ([]security_log.SecurityLog, error) {
+	var logs []security_log.SecurityLog
 	err := r.db.Order("timestamp desc").Limit(limit).Find(&logs).Error
 	return logs, err
 }

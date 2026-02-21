@@ -1,59 +1,49 @@
 package usecase
 
 import (
-	"api-guardian/internal/delivery/http/dto"
-	"api-guardian/internal/repository"
+	"api-guardian/internal/domain/auth/dto"
+	authInterface "api-guardian/internal/domain/auth/interfaces"
+	userInterface "api-guardian/internal/domain/user/interfaces"
 	"api-guardian/pkg/hashutil"
-	"api-guardian/pkg/jwtutil"
-	"errors"
 	"fmt"
 	"strings"
 )
 
-type AuthUsecase interface {
-	Login(req dto.LoginRequest) (dto.LoginResponse, error)
-	Register(req dto.LoginRequest) error
-}
-
 type authUsecase struct {
-	userRepo *repository.UserRepository
-	jwtKey   []byte
+	userRepo userInterface.UserRepository
+	hasher   authInterface.PasswordHasher
+	tokenSvc authInterface.TokenProvider
 }
 
-func NewAuthUsecase(repo *repository.UserRepository, key string) AuthUsecase {
+// Constructor yang "Luwes" (Menerima apa saja yang penting sesuai interface)
+func NewAuthUsecase(
+	repo userInterface.UserRepository,
+	h authInterface.PasswordHasher,
+	ts authInterface.TokenProvider,
+) authInterface.AuthUsecase {
 	return &authUsecase{
 		userRepo: repo,
-		jwtKey:   []byte(key),
+		hasher:   h,
+		tokenSvc: ts,
 	}
 }
 
-// Implementasi Method Login (Pindahan logic dari Handler)
 func (u *authUsecase) Login(req dto.LoginRequest) (dto.LoginResponse, error) {
-	// 1. Cari User
+	// 1. Tanya Repo
 	user, err := u.userRepo.GetUserByUsername(req.Username)
 	if err != nil {
-		return dto.LoginResponse{}, errors.New("invalid username or password")
+		return dto.LoginResponse{}, authInterface.ErrInvalidCredentials
 	}
 
-	// Gunakan strings.TrimSpace untuk jaga-jaga
-	if !hashutil.CheckPasswordHash(strings.TrimSpace(req.Password), strings.TrimSpace(user.PasswordHash)) {
-		fmt.Println("DEBUG: Password mismatch!")
-		return dto.LoginResponse{}, errors.New("invalid username or password")
+	// 2. Tanya Hasher
+	if !u.hasher.Compare(strings.TrimSpace(req.Password), user.PasswordHash) {
+		return dto.LoginResponse{}, authInterface.ErrInvalidCredentials
 	}
 
-	// 2. Cek Password dengan Sterilisasi
-	// Kita trim input dan hash dari DB untuk membuang karakter siluman
-	inputPassword := strings.TrimSpace(req.Password)
-	storedHash := strings.TrimSpace(user.PasswordHash)
-
-	if !hashutil.CheckPasswordHash(inputPassword, storedHash) {
-		return dto.LoginResponse{}, errors.New("invalid username or password")
-	}
-
-	// 3. Generate Token
-	token, err := jwtutil.GenerateToken(uint(user.ID), user.Username, user.Role, u.jwtKey)
+	// 3. Tanya Token Service
+	token, err := u.tokenSvc.Generate(uint(user.ID), user.Username, user.Role)
 	if err != nil {
-		return dto.LoginResponse{}, err
+		return dto.LoginResponse{}, authInterface.ErrInternalServer
 	}
 
 	return dto.LoginResponse{

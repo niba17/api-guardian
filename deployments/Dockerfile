@@ -1,14 +1,14 @@
 # Stage 1: Kompilasi
 FROM golang:1.26-alpine AS builder
 
+# Tidak perlu git atau proxy karena kita pakai vendor
+RUN apk add --no-cache tzdata ca-certificates git
+
 WORKDIR /app
 
-# Tidak perlu git atau proxy karena kita pakai vendor
-RUN apk add --no-cache tzdata ca-certificates
+COPY go.mod go.sum ./
 
-# Copy go.mod dan folder vendor
-COPY go.mod ./
-COPY vendor/ ./vendor/
+RUN go mod download
 
 # Copy seluruh source code sisanya
 COPY . .

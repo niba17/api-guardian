@@ -1,12 +1,12 @@
 package middleware
 
 import (
-	"api-guardian/internal/domain"
-	"api-guardian/internal/repository"
-	"api-guardian/pkg/maskutil"
+	"api-guardian/internal/domain/security_log"
+	"api-guardian/internal/usecase"
 	"api-guardian/pkg/uaparser"
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -17,71 +17,119 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// AuditLogger sekarang menerima DUA Repository: LogRepo (GORM) dan BlRepo (Redis)
-func AuditLogger(geoDB *geoip2.Reader, logRepo repository.SecurityLogRepository, blRepo repository.BlacklistRepository, next http.Handler) http.Handler {
+func Logger(geoDB *geoip2.Reader, logUC *usecase.LogUsecase, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		ctx := r.Context()
 
-		// 1. Capture Request Body
+		// 1. Capture & Mask Request Body
 		var bodyStr string
 		if r.Method != http.MethodGet && r.Body != nil {
 			bodyBytes, _ := io.ReadAll(io.LimitReader(r.Body, 2048))
 			r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
-			bodyStr = maskutil.MaskPII(string(bodyBytes))
+			// Memanggil MaskPII yang ada di file mask.go (satu package)
+			bodyStr = MaskPII(string(bodyBytes))
 		}
 
-		wrapped := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
+		// 🚀 Bungkus writer asli dengan responseWriter kita
+		wrapped := &responseWriter{ResponseWriter: w, statusCode: 0}
 
-		// 2. Jalankan Handler (HANYA SEKALI, BOS! Saya hapus yang duplikat)
+		// 2. Jalankan Handler berikutnya
 		next.ServeHTTP(wrapped, r)
 
-		// 3. Offload Logging & Blacklisting
-		go func(c context.Context, status int, latency time.Duration, path string, method string, ua string, ip string) {
-			// Ambil reason dari header yang diset oleh WAF atau RateLimiter
-			wafReason := wrapped.Header().Get("X-Guardian-Waf-Reason")
+		// Fallback jika status code tidak terisi
+		if wrapped.statusCode == 0 {
+			wrapped.statusCode = http.StatusOK
+		}
 
+		// 🚀 DEKLARASI VARIABEL (Pastikan semua nama ini dipanggil di bawah)
+		latency := time.Since(start)
+		wafReason := wrapped.Header().Get("X-Guardian-WAF-Reason")
+		reqIP := GetIP(r)
+		reqUA := r.UserAgent()
+		reqPath := r.URL.Path
+		reqMethod := r.Method
+		logID := uuid.New().String()
+		browser, os, isBot := uaparser.Parse(reqUA)
+
+		// 📺 A. CETAK KE TERMINAL (Memakai reqMethod, reqPath, dll)
+		statusColor := "\033[32m"
+		if wrapped.statusCode >= 400 {
+			statusColor = "\033[33m"
+		}
+		if wrapped.statusCode >= 500 {
+			statusColor = "\033[31m"
+		}
+		fmt.Printf("📝 %s %s%d%s | %10s | %15s | %s %s\n",
+			time.Now().Format("15:04:05"), statusColor, wrapped.statusCode, "\033[0m",
+			latency, reqIP, reqMethod, reqPath)
+
+		// 📁 B. TULIS KE app.log (Memakai semua variabel nganggur tadi)
+		logEvent := log.Info()
+		if wrapped.statusCode >= 400 {
+			logEvent = log.Warn()
+		}
+
+		logEvent.
+			Str("log_id", logID).
+			Str("ip", reqIP).
+			Str("method", reqMethod).
+			Str("path", reqPath).
+			Int("status", wrapped.statusCode).
+			Int64("latency_ms", latency.Milliseconds()).
+			Str("browser", browser).
+			Str("os", os).
+			Bool("is_bot", isBot).
+			Str("body", bodyStr).
+			Msg("AccessLog")
+
+		// 3. Offload ke LogUsecase (Asynchronous)
+		go func(status int, lat time.Duration, path, method, ua, ip, body, reason string) {
 			browser, os, isBot := uaparser.Parse(ua)
-			logData := &domain.SecurityLog{
+
+			logData := &security_log.SecurityLog{
 				ID:        uuid.New().String(),
 				Timestamp: time.Now().UTC(),
 				IP:        ip,
 				Method:    method,
 				Path:      path,
 				Status:    status,
-				Latency:   latency.Milliseconds(),
+				Latency:   lat.Milliseconds(),
 				UserAgent: ua,
 				Browser:   browser,
 				OS:        os,
 				IsBot:     isBot,
-				Body:      bodyStr,
+				Body:      body,
 			}
 
-			enrichLogData(logData, wafReason, geoDB)
-
-			// 🔥 LOGIKA AUTO-BAN
-			// Kita hanya hukum jika reason datang dari WAF (serangan aktif)
-			// Dan jangan hukum lagi kalau statusnya memang sudah Banned
-			if wafReason != "" && wafReason != "IP Permanently Banned" {
-				vCount, _ := blRepo.IncrViolation(c, ip)
-
-				if vCount == 1 {
-					_ = blRepo.SetExpire(c, "violation:"+ip, 1*time.Hour)
-				}
-
-				if vCount >= 5 {
-					log.Error().Str("ip", ip).Msg("🚨 AUTO-BAN EXECUTED")
-					_ = blRepo.SetBan(c, ip, 24*time.Hour)
-				}
-			}
-
-			_ = logRepo.Save(logData)
-		}(ctx, wrapped.statusCode, time.Since(start), r.URL.Path, r.Method, r.UserAgent(), GetIP(r))
+			enrichLogData(logData, reason, geoDB)
+			logUC.LogAndEvaluate(context.Background(), logData, reason)
+		}(wrapped.statusCode, latency, reqPath, reqMethod, reqUA, reqIP, bodyStr, wafReason)
 	})
 }
 
-// Helper untuk deteksi status & geo
-func enrichLogData(l *domain.SecurityLog, reason string, geo *geoip2.Reader) {
+// --- HELPER STRUCTS & FUNCTIONS ---
+
+// responseWriter adalah interceptor untuk menangkap status code
+type responseWriter struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+func (rw *responseWriter) WriteHeader(code int) {
+	if rw.statusCode == 0 {
+		rw.statusCode = code
+		rw.ResponseWriter.WriteHeader(code)
+	}
+}
+
+func (rw *responseWriter) Write(b []byte) (int, error) {
+	if rw.statusCode == 0 {
+		rw.statusCode = http.StatusOK
+	}
+	return rw.ResponseWriter.Write(b)
+}
+
+func enrichLogData(l *security_log.SecurityLog, reason string, geo *geoip2.Reader) {
 	l.IsBlocked = l.Status >= 400
 	l.ThreatType = "None"
 	l.ThreatDetails = "-"
@@ -89,8 +137,8 @@ func enrichLogData(l *domain.SecurityLog, reason string, geo *geoip2.Reader) {
 	if geo != nil {
 		ip := net.ParseIP(l.IP)
 		if record, err := geo.City(ip); err == nil {
-			l.Country = record.Country.Names["en"] // Ambil nama negara
-			l.City = record.City.Names["en"]       // Ambil nama kota
+			l.Country = record.Country.Names["en"]
+			l.City = record.City.Names["en"]
 		}
 	}
 
@@ -98,18 +146,11 @@ func enrichLogData(l *domain.SecurityLog, reason string, geo *geoip2.Reader) {
 		if reason != "" {
 			l.ThreatType = "WAF"
 			l.ThreatDetails = reason
+		} else if l.Status == 429 {
+			l.ThreatType = "RateLimit"
+			l.ThreatDetails = "Too Many Requests"
 		} else {
 			l.ThreatType = "ResponseError"
 		}
 	}
-}
-
-type responseWriter struct {
-	http.ResponseWriter
-	statusCode int
-}
-
-func (rw *responseWriter) WriteHeader(code int) {
-	rw.statusCode = code
-	rw.ResponseWriter.WriteHeader(code)
 }

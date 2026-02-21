@@ -23,6 +23,7 @@ This project is designed as the **First Line of Defense** to protect backend ser
 - ✅ **Basic Web Application Firewall (WAF)**: Inspecting every incoming HTTP request in real-time before it can reach the backend services or the database.
 - ✅ **IP Whitelisting**: A special lane (VVIP) for administrator IPs or internal services to bypass limitations.
 - ✅ **Circuit Breakers**: Adds system intelligence by automatically cutting off traffic to a failing backend.
+- ✅ **CORS**: Adds CORS for BE and FE connection.
 - ✅ **PII Redaction/Masking**: Automatically turns sensitive data like Emails or IDs into `***`.
 
 ### 📊 Observability & Operations
