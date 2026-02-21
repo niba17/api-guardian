@@ -32,16 +32,25 @@ func startServer(h http.Handler, port string, rdb *redis.Client, geo *geoip2.Rea
 	<-stop
 	log.Info().Msg("⚠️ Shutting down...")
 
-	// Cleanup
-	if rdb != nil {
-		rdb.Close()
-	}
-	if geo != nil {
-		geo.Close()
-	}
-
+	// 1. Buat context timeout dulu
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	return srv.Shutdown(ctx)
+	// 2. Matikan HTTP Server dulu (tunggu request aktif selesai)
+	err := srv.Shutdown(ctx)
+
+	// 3. BARU TUTUP Resource pendukung (Redis & GeoIP)
+	// Sekarang aman, karena sudah tidak ada request aktif yang pakai resource ini
+	if rdb != nil {
+		log.Info().Msg("🔌 Closing Redis connection...")
+		rdb.Close()
+	}
+	if geo != nil {
+		log.Info().Msg("🌍 Closing GeoIP database...")
+		geo.Close()
+	}
+
+	log.Info().Msg("✅ API Guardian has retired for the day. Graceful shutdown complete.")
+
+	return err
 }

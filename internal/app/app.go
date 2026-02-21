@@ -15,6 +15,7 @@ import (
 	"api-guardian/internal/usecase"
 
 	"github.com/oschwald/geoip2-golang"
+	"github.com/rs/zerolog/log"
 )
 
 // Run mengoordinasi inisialisasi seluruh komponen aplikasi
@@ -26,7 +27,16 @@ func Run(cfg *config.AppConfig) error {
 	db.AutoMigrate(&user.User{}, &security_log.SecurityLog{})
 
 	// Resource cleanup ditangani di server.go melalui startServer
-	geoDB, _ := geoip2.Open(cfg.GeoDBPath)
+	geoDB, err := geoip2.Open(cfg.GeoDBPath)
+	if err != nil {
+		// Kita pakai Warning saja agar aplikasi tidak mati, tapi kita tahu ada yang salah
+		log.Warn().
+			Str("path", cfg.GeoDBPath).
+			Err(err).
+			Msg("🌍 GeoIP Database NOT FOUND. Location tracking will be 'Unknown'")
+	} else {
+		log.Info().Str("path", cfg.GeoDBPath).Msg("🌍 GeoIP Database Loaded Successfully")
+	}
 	lb, err := proxy.NewLoadBalance(cfg.TargetURLs)
 	if err != nil {
 		return err // Hentikan jika Load Balancer gagal

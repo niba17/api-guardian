@@ -26,32 +26,45 @@ func Logger(geoDB *geoip2.Reader, logUC *usecase.LogUsecase, next http.Handler) 
 		if r.Method != http.MethodGet && r.Body != nil {
 			bodyBytes, _ := io.ReadAll(io.LimitReader(r.Body, 2048))
 			r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
-			// Memanggil MaskPII yang ada di file mask.go (satu package)
 			bodyStr = MaskPII(string(bodyBytes))
 		}
 
-		// 🚀 Bungkus writer asli dengan responseWriter kita
 		wrapped := &responseWriter{ResponseWriter: w, statusCode: 0}
-
-		// 2. Jalankan Handler berikutnya
 		next.ServeHTTP(wrapped, r)
 
-		// Fallback jika status code tidak terisi
 		if wrapped.statusCode == 0 {
 			wrapped.statusCode = http.StatusOK
 		}
 
-		// 🚀 DEKLARASI VARIABEL (Pastikan semua nama ini dipanggil di bawah)
+		// 🚀 DATA GATHERING (Lakukan di awal agar Log & DB sinkron)
 		latency := time.Since(start)
 		wafReason := wrapped.Header().Get("X-Guardian-WAF-Reason")
 		reqIP := GetIP(r)
-		reqUA := r.UserAgent()
-		reqPath := r.URL.Path
-		reqMethod := r.Method
-		logID := uuid.New().String()
-		browser, os, isBot := uaparser.Parse(reqUA)
 
-		// 📺 A. CETAK KE TERMINAL (Memakai reqMethod, reqPath, dll)
+		// 🛠️ MOCK IP UNTUK TESTING (Opsional: Hapus jika sudah deploy ke VPS beneran)
+		if reqIP == "localhost" || reqIP == "::1" || reqIP == "127.0.0.1" {
+			reqIP = "180.252.170.158"
+		}
+
+		reqUA := r.UserAgent()
+		browser, os, isBot := uaparser.Parse(reqUA)
+		logID := uuid.New().String()
+
+		// 🌍 GEOIP LOOKUP (Pindahkan ke sini agar Zerolog bisa pakai)
+		country, city := "Unknown", "Unknown"
+		if geoDB != nil {
+			ip := net.ParseIP(reqIP)
+			if record, err := geoDB.City(ip); err == nil {
+				if c, ok := record.Country.Names["en"]; ok {
+					country = c
+				}
+				if c, ok := record.City.Names["en"]; ok {
+					city = c
+				}
+			}
+		}
+
+		// 📺 A. CETAK KE TERMINAL (Fast View)
 		statusColor := "\033[32m"
 		if wrapped.statusCode >= 400 {
 			statusColor = "\033[33m"
@@ -59,11 +72,12 @@ func Logger(geoDB *geoip2.Reader, logUC *usecase.LogUsecase, next http.Handler) 
 		if wrapped.statusCode >= 500 {
 			statusColor = "\033[31m"
 		}
-		fmt.Printf("📝 %s %s%d%s | %10s | %15s | %s %s\n",
-			time.Now().Format("15:04:05"), statusColor, wrapped.statusCode, "\033[0m",
-			latency, reqIP, reqMethod, reqPath)
 
-		// 📁 B. TULIS KE app.log (Memakai semua variabel nganggur tadi)
+		fmt.Printf("📝 %s %s%d%s | %10s | %15s (%s) | %s %s\n",
+			time.Now().Format("15:04:05"), statusColor, wrapped.statusCode, "\033[0m",
+			latency, reqIP, country, r.Method, r.URL.Path)
+
+		// 📁 B. TULIS KE app.log (Sekarang lengkap dengan Country/City!)
 		logEvent := log.Info()
 		if wrapped.statusCode >= 400 {
 			logEvent = log.Warn()
@@ -72,24 +86,25 @@ func Logger(geoDB *geoip2.Reader, logUC *usecase.LogUsecase, next http.Handler) 
 		logEvent.
 			Str("log_id", logID).
 			Str("ip", reqIP).
-			Str("method", reqMethod).
-			Str("path", reqPath).
+			Str("country", country). // 🌍 Muncul di log!
+			Str("city", city).       // 🌍 Muncul di log!
+			Str("method", r.Method).
+			Str("path", r.URL.Path).
 			Int("status", wrapped.statusCode).
 			Int64("latency_ms", latency.Milliseconds()).
 			Str("browser", browser).
 			Str("os", os).
 			Bool("is_bot", isBot).
-			Str("body", bodyStr).
 			Msg("AccessLog")
 
-		// 3. Offload ke LogUsecase (Asynchronous)
-		go func(status int, lat time.Duration, path, method, ua, ip, body, reason string) {
-			browser, os, isBot := uaparser.Parse(ua)
-
+		// 3. Offload ke LogUsecase (Database)
+		go func(status int, lat time.Duration, path, method, ua, ip, body, reason, cty, ctr string) {
 			logData := &security_log.SecurityLog{
 				ID:        uuid.New().String(),
 				Timestamp: time.Now().UTC(),
 				IP:        ip,
+				Country:   ctr,
+				City:      cty,
 				Method:    method,
 				Path:      path,
 				Status:    status,
@@ -101,15 +116,14 @@ func Logger(geoDB *geoip2.Reader, logUC *usecase.LogUsecase, next http.Handler) 
 				Body:      body,
 			}
 
-			enrichLogData(logData, reason, geoDB)
+			enrichStatusData(logData, reason)
 			logUC.LogAndEvaluate(context.Background(), logData, reason)
-		}(wrapped.statusCode, latency, reqPath, reqMethod, reqUA, reqIP, bodyStr, wafReason)
+		}(wrapped.statusCode, latency, r.URL.Path, r.Method, reqUA, reqIP, bodyStr, wafReason, city, country)
 	})
 }
 
-// --- HELPER STRUCTS & FUNCTIONS ---
+// --- HELPERS ---
 
-// responseWriter adalah interceptor untuk menangkap status code
 type responseWriter struct {
 	http.ResponseWriter
 	statusCode int
@@ -129,18 +143,11 @@ func (rw *responseWriter) Write(b []byte) (int, error) {
 	return rw.ResponseWriter.Write(b)
 }
 
-func enrichLogData(l *security_log.SecurityLog, reason string, geo *geoip2.Reader) {
+// Pisahkan fungsi enrich hanya untuk status, Geo sudah diproses di atas
+func enrichStatusData(l *security_log.SecurityLog, reason string) {
 	l.IsBlocked = l.Status >= 400
 	l.ThreatType = "None"
 	l.ThreatDetails = "-"
-
-	if geo != nil {
-		ip := net.ParseIP(l.IP)
-		if record, err := geo.City(ip); err == nil {
-			l.Country = record.Country.Names["en"]
-			l.City = record.City.Names["en"]
-		}
-	}
 
 	if l.IsBlocked {
 		if reason != "" {

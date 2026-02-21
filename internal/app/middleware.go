@@ -31,7 +31,8 @@ func wrapGlobalMiddlewares(
 	}
 
 	// 3. LAPISAN SEKURITI 2: WAF (Cek Payload Jahat)
-	h = middleware.BasicWAF(h)
+	// 🚀 PERBAIKAN: Berikan daftar Whitelist dari config, lalu bungkus (h)
+	h = middleware.BasicWAF(cfg.WhitelistIPs)(h)
 
 	// 4. LAPISAN SEKURITI 1: Rate Limit & Ban (Garda Depan Satpam)
 	h = middleware.RateLimit(RatelimitRepo, banUC, cfg.WhitelistIPs, cfg.RefillRate, cfg.BurstCapacity, h)

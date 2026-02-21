@@ -59,8 +59,8 @@ func NewLoadBalance(targets []string) (*LoadBalancer, error) {
 }
 
 func setupProxyCallbacks(proxy *httputil.ReverseProxy, targetURL *url.URL, rawTarget string) {
+	// 1. MODIFIKASI REQUEST (Berangkat ke Backend)
 	originalDirector := proxy.Director
-
 	proxy.Director = func(req *http.Request) {
 		originalDirector(req)
 
@@ -69,11 +69,9 @@ func setupProxyCallbacks(proxy *httputil.ReverseProxy, targetURL *url.URL, rawTa
 		req.Header.Set("X-Forwarded-Host", req.Header.Get("Host"))
 
 		// 🚀 INI YANG PALING PENTING: Meneruskan IP asli ke backend!
-		// Kita pinjam fungsi GetIP dari package middleware Bos
 		clientIP := middleware.GetIP(req)
 		req.Header.Set("X-Real-IP", clientIP)
 
-		// X-Forwarded-For bisa bertumpuk kalau melewati banyak proxy, kita tambahkan IP baru
 		existingXFF := req.Header.Get("X-Forwarded-For")
 		if existingXFF != "" {
 			req.Header.Set("X-Forwarded-For", existingXFF+", "+clientIP)
@@ -82,6 +80,24 @@ func setupProxyCallbacks(proxy *httputil.ReverseProxy, targetURL *url.URL, rawTa
 		}
 	}
 
+	// 🚀 2. MODIFIKASI RESPONSE (Pulang dari Backend) -> INI FITUR BARU KITA!
+	proxy.ModifyResponse = func(resp *http.Response) error {
+		// 🛡️ Hapus jejak identitas asli target (Google/NodeJS/dll)
+		resp.Header.Del("Server")
+		resp.Header.Del("X-Powered-By")
+
+		// 🔒 Pasang identitas palsu kita
+		resp.Header.Set("Server", "api-guardian")
+
+		// 🛡️ Suntik header keamanan standar militer (OWASP)
+		resp.Header.Set("X-Content-Type-Options", "nosniff")
+		resp.Header.Set("X-Frame-Options", "SAMEORIGIN")
+		resp.Header.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+
+		return nil
+	}
+
+	// 3. PENANGANAN ERROR (Backend Mati/Timeout)
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 		log.Error().Err(err).Str("backend", rawTarget).Msg("Proxy Error")
 
