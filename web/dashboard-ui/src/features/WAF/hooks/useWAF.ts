@@ -6,41 +6,13 @@ export const useWAFData = () => {
   const [logs, setLogs] = useState<SecurityLog[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // --- LOGIC PERSISTENCE (Sama seperti Overview/Traffic) ---
-  const getStoredLogs = (): SecurityLog[] => {
-    try {
-      const saved = localStorage.getItem("guardian_persistent_logs");
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  };
-
   useEffect(() => {
-    const initialLogs = getStoredLogs();
-    if (initialLogs.length > 0) setLogs(initialLogs);
-
     const fetchData = async () => {
       try {
         const resLogs = await api.get("/dashboard/logs");
-        const newIncomingLogs: SecurityLog[] = Array.isArray(resLogs.data)
-          ? resLogs.data
-          : [];
 
-        setLogs((prevLogs) => {
-          const logMap = new Map();
-          prevLogs.forEach((log) => logMap.set(log.id, log));
-          newIncomingLogs.forEach((log) => logMap.set(log.id, log));
-
-          const merged = Array.from(logMap.values());
-          const limitedLogs = merged.slice(-1000);
-
-          localStorage.setItem(
-            "guardian_persistent_logs",
-            JSON.stringify(limitedLogs)
-          );
-          return limitedLogs;
-        });
+        // 🚀 Bersih dan langsung dari server
+        setLogs(Array.isArray(resLogs.data) ? resLogs.data : []);
       } catch (error) {
         console.error("WAF Data Fetch Error:", error);
       } finally {

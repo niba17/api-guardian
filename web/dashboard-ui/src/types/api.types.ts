@@ -20,7 +20,7 @@ export interface SecurityLog {
 
 export interface SystemStats {
   total_requests: number;
-  blocked_requests: number;
+  total_blocked: number;
   unique_ips: number; // 👈 INI YANG TADI HILANG/SALAH
   avg_latency: string;
 }

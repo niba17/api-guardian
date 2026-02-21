@@ -7,7 +7,8 @@ interface User {
 
 interface AuthContextType {
   user: User | null;
-  login: (username: string) => void;
+  // 🚀 FIX 1: Fungsi login sekarang menerima token asli dari luar
+  login: (username: string, token: string) => void;
   logout: () => void;
   isAuthenticated: boolean;
 }
@@ -15,16 +16,15 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  // 👇 FIX: Inisialisasi state langsung (Lazy Initializer)
-  // Ini menghilangkan kebutuhan akan useEffect dan mencegah render dua kali
   const [user, setUser] = useState<User | null>(() => {
     const token = localStorage.getItem("guardian_token");
     if (token) return { username: "admin", role: "Commander" };
     return null;
   });
 
-  const login = (username: string) => {
-    localStorage.setItem("guardian_token", "rahasia-negara");
+  // 🚀 FIX 2: Simpan token yang dikirimkan, bukan string "rahasia-negara"
+  const login = (username: string, token: string) => {
+    localStorage.setItem("guardian_token", token);
     setUser({ username, role: "Commander" });
   };
 

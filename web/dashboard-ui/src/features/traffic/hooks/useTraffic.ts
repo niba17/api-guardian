@@ -7,20 +7,7 @@ export const useTrafficData = () => {
   const [logs, setLogs] = useState<SecurityLog[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // --- PERSISTENCE LOGIC ---
-  const getStoredLogs = (): SecurityLog[] => {
-    try {
-      const saved = localStorage.getItem("guardian_persistent_logs");
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  };
-
   useEffect(() => {
-    const initialLogs = getStoredLogs();
-    if (initialLogs.length > 0) setLogs(initialLogs);
-
     const fetchData = async () => {
       try {
         const [resStats, resLogs] = await Promise.all([
@@ -29,24 +16,9 @@ export const useTrafficData = () => {
         ]);
 
         setStats(resStats.data);
-        const newIncomingLogs: SecurityLog[] = Array.isArray(resLogs.data)
-          ? resLogs.data
-          : [];
 
-        setLogs((prevLogs) => {
-          const logMap = new Map();
-          prevLogs.forEach((log) => logMap.set(log.id, log));
-          newIncomingLogs.forEach((log) => logMap.set(log.id, log));
-
-          const merged = Array.from(logMap.values());
-          const limitedLogs = merged.slice(-1000);
-
-          localStorage.setItem(
-            "guardian_persistent_logs",
-            JSON.stringify(limitedLogs)
-          );
-          return limitedLogs;
-        });
+        // 🚀 Langsung set data dari server, bersih tanpa merge localStorage!
+        setLogs(Array.isArray(resLogs.data) ? resLogs.data : []);
       } catch (error) {
         console.error("Traffic Data Fetch Error:", error);
       } finally {

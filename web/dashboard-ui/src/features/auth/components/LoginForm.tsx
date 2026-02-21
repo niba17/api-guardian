@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Lock, User, ArrowRight, AlertCircle } from "lucide-react";
+import { Lock, User, AlertCircle } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../../../contexts/AuthContext";
 
@@ -21,6 +21,7 @@ export default function LoginForm() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          "X-API-KEY": "kunci-rahasia-bos-123",
         },
         body: JSON.stringify({
           username: form.username,
@@ -30,17 +31,33 @@ export default function LoginForm() {
 
       const data = await response.json();
 
+      // 🚀 FIX 1: Tampilkan respon asli dari server di Console (Tekan F12 di browser)
+      console.log("🛡️ Respon Server Guardian:", data);
+
       if (!response.ok) {
-        throw new Error(data.error || "Login failed");
+        throw new Error(data.error || data.message || "Login failed");
+      }
+
+      // 🚀 FIX 2: Ekstraksi Data Anti-Gagal (Handle perbedaan huruf besar/kecil atau wrapper 'data')
+      const token =
+        data.token || data.Token || data.data?.token || data.data?.Token;
+      const userData =
+        data.user || data.User || data.data?.user || data.data?.User;
+
+      // 🚀 FIX 3: Cegah penyimpanan token 'undefined'
+      if (!token) {
+        throw new Error("Sistem gagal membaca Token dari Server!");
       }
 
       // Login Sukses
-      login(data.user.username);
-      localStorage.setItem("guardian_token", data.token); // Simpan Token
-      navigate("/"); // Redirect ke Dashboard
+      login(userData?.username || form.username, token);
+
+      // Beri jeda sepersekian detik agar state React (AuthContext) stabil sebelum pindah halaman
+      setTimeout(() => {
+        navigate("/");
+      }, 100);
     } catch (err) {
       console.error(err);
-      // 👇 FIX: Mengganti (err: any) dengan pengecekan tipe yang aman
       if (err instanceof Error) {
         setError(err.message);
       } else {
@@ -69,7 +86,7 @@ export default function LoginForm() {
 
       <form onSubmit={handleLogin} className="space-y-6">
         {error && (
-          <div className="bg-red-500/10 border border-red-500/20 text-red-400 p-3 rounded-xl flex items-center gap-2 text-sm">
+          <div className="bg-red-500/10 border border-red-500/20 text-red-400 p-3 rounded-xl flex items-center gap-2 text-sm mb-4">
             <AlertCircle size={16} /> {error}
           </div>
         )}
@@ -111,9 +128,7 @@ export default function LoginForm() {
           {loading ? (
             <span className="animate-spin h-5 w-5 border-2 border-white border-t-transparent rounded-full"></span>
           ) : (
-            <>
-              Authenticate <ArrowRight size={18} />
-            </>
+            <>Authenticate</>
           )}
         </button>
       </form>

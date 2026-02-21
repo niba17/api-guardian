@@ -1,8 +1,9 @@
 package config
 
 import (
+	"fmt" // 👈 Tambahkan ini untuk merakit DSN
 	"os"
-	"strconv" // 👈 Tambahkan ini untuk parsing angka
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,17 +16,15 @@ type AppConfig struct {
 	TargetURLs     []string
 	APIKeys        []string
 	WhitelistIPs   []string
-	AllowedOrigins []string // 🚀 TAMBAHKAN INI UNTUK CORS
+	AllowedOrigins []string
 	CacheTTL       time.Duration
 	GeoDBPath      string
-	DatabaseDSN    string
+	DatabaseDSN    string // 👈 Tetap satu string, tapi kita rakit di bawah
 	RedisAddr      string
 	JWTSecret      string
-
-	// 🚀 TAMBAHKAN INI UNTUK RATE LIMITER (Agar tidak hardcode)
-	RateLimit     int
-	RefillRate    float64
-	BurstCapacity int
+	RateLimit      int
+	RefillRate     float64
+	BurstCapacity  int
 }
 
 func Load() *AppConfig {
@@ -33,23 +32,34 @@ func Load() *AppConfig {
 		log.Info().Msg(".env not found, using Environment Variables system")
 	}
 
+	// 1. Ambil komponen database satu per satu
+	dbHost := getEnv("DB_HOST", "localhost")
+	dbPort := getEnv("DB_PORT", "5432")
+	dbUser := getEnv("DB_USER", "postgres")
+	dbPass := getEnv("DB_PASSWORD", "")
+	dbName := getEnv("DB_NAME", "api_guardian")
+	dbSSL := getEnv("DB_SSLMODE", "disable")
+	dbTZ := getEnv("DB_TIMEZONE", "UTC")
+
+	// 2. Rakit DSN secara otomatis
+	// Ini membuat .env Bos lebih rapi dan aman
+	dsn := fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%s sslmode=%s TimeZone=%s",
+		dbHost, dbUser, dbPass, dbName, dbPort, dbSSL, dbTZ)
+
 	return &AppConfig{
-		Port:         getEnv("PORT", "8080"),
-		TargetURLs:   parseCSV(getEnv("TARGET_URL", "http://localhost:8081")),
-		APIKeys:      parseCSV(getEnv("API_KEYS", "")),
-		WhitelistIPs: parseCSV(getEnv("WHITELIST_IPS", "")),
-		// 🚀 Ambil dari env, default-nya ke localhost Vite kalau kosong
+		Port:           getEnv("PORT", "8080"),
+		TargetURLs:     parseCSV(getEnv("TARGET_URL", "http://localhost:8081")),
+		APIKeys:        parseCSV(getEnv("API_KEYS", "")),
+		WhitelistIPs:   parseCSV(getEnv("WHITELIST_IPS", "")),
 		AllowedOrigins: parseCSV(getEnv("ALLOWED_ORIGINS", "http://localhost:5173")),
 		CacheTTL:       parseDuration(getEnv("CACHE_TTL", "60s")),
 		GeoDBPath:      getEnv("GEOIP_DB_PATH", "configs/geoip/GeoLite2-City.mmdb"),
-		DatabaseDSN:    getEnv("DATABASE_DSN", ""),
+		DatabaseDSN:    dsn, // 👈 Hasil rakitan masuk ke sini
 		RedisAddr:      getEnv("REDIS_ADDR", "localhost:6379"),
 		JWTSecret:      getEnv("JWT_SECRET", "rahasia-negara-bos-jangan-disebar"),
-
-		// 🚀 Ambil konfigurasi limiter dari .env
-		RateLimit:     parseInt(getEnv("RATE_LIMIT", "5")),
-		RefillRate:    parseFloat(getEnv("REFILL_RATE", "0.5")),
-		BurstCapacity: parseInt(getEnv("BURST_CAPACITY", "10")),
+		RateLimit:      parseInt(getEnv("RATE_LIMIT", "5")),
+		RefillRate:     parseFloat(getEnv("REFILL_RATE", "0.5")),
+		BurstCapacity:  parseInt(getEnv("BURST_CAPACITY", "10")),
 	}
 }
 

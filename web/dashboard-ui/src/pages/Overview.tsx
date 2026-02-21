@@ -28,7 +28,7 @@ export default function Overview() {
 
   // Kalkulasi data valid
   const total = stats?.total_requests || 0;
-  const blocked = stats?.blocked_requests || 0;
+  const blocked = stats?.total_blocked || 0;
   const valid = total - blocked;
 
   return (

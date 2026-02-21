@@ -11,10 +11,9 @@ export const useOverviewData = () => {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        // Fetch Parallel (Stats + Logs dari File Server)
         const [resStats, resLogs] = await Promise.all([
           api.get("/dashboard/stats"),
-          api.get("/dashboard/logs"), // Backend sekarang baca dari file app.log
+          api.get("/dashboard/logs"),
         ]);
 
         setStats(resStats.data);

@@ -26,6 +26,8 @@ func Run(cfg *config.AppConfig) error {
 	db := postgre.InitDB(cfg.DatabaseDSN)
 	db.AutoMigrate(&user.User{}, &security_log.SecurityLog{})
 
+	postgre.SeedAdmin(db)
+
 	// Resource cleanup ditangani di server.go melalui startServer
 	geoDB, err := geoip2.Open(cfg.GeoDBPath)
 	if err != nil {

@@ -4,11 +4,14 @@ const api = axios.create({
   baseURL: "http://localhost:8080/api", // Sesuaikan dengan port backend Bos
 });
 
-// 👇 TAMBAHKAN INI: Interceptor Request
+// Interceptor Request
 api.interceptors.request.use(
   (config) => {
     // Ambil token dari localStorage
     const token = localStorage.getItem("guardian_token");
+
+    // 🚀 FIX: Suntikkan Kunci Gerbang Depan (API Key) ke semua request!
+    config.headers["X-API-KEY"] = "kunci-rahasia-bos-123";
 
     if (token) {
       // Pasang di header Authorization: Bearer <token>
@@ -22,7 +25,7 @@ api.interceptors.request.use(
   }
 );
 
-// Interceptor Response (Opsional: Handle kalau token expired)
+// Interceptor Response
 api.interceptors.response.use(
   (response) => response,
   (error) => {
