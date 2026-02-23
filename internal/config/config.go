@@ -52,7 +52,7 @@ func Load() *AppConfig {
 		APIKeys:        parseCSV(getEnv("API_KEYS", "")),
 		WhitelistIPs:   parseCSV(getEnv("WHITELIST_IPS", "")),
 		AllowedOrigins: parseCSV(getEnv("ALLOWED_ORIGINS", "http://localhost:5173")),
-		CacheTTL:       parseDuration(getEnv("CACHE_TTL", "60s")),
+		CacheTTL:       parseDuration(getEnv("CACHE_TTL", "2s")),
 		GeoDBPath:      getEnv("GEOIP_DB_PATH", "configs/geoip/GeoLite2-City.mmdb"),
 		DatabaseDSN:    dsn, // 👈 Hasil rakitan masuk ke sini
 		RedisAddr:      getEnv("REDIS_ADDR", "localhost:6379"),

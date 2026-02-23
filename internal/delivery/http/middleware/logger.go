@@ -6,6 +6,7 @@ import (
 	"api-guardian/pkg/uaparser"
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -29,19 +30,36 @@ func Logger(geoDB *geoip2.Reader, logUC *usecase.LogUsecase, next http.Handler) 
 			bodyStr = MaskPII(string(bodyBytes))
 		}
 
-		wrapped := &responseWriter{ResponseWriter: w, statusCode: 0}
+		wrapped := &responseWriter{
+			ResponseWriter: w,
+			statusCode:     0,
+			body:           bytes.NewBuffer(nil),
+		}
 		next.ServeHTTP(wrapped, r)
 
 		if wrapped.statusCode == 0 {
 			wrapped.statusCode = http.StatusOK
 		}
 
-		// 🚀 DATA GATHERING (Lakukan di awal agar Log & DB sinkron)
+		// 🚀 Simpan response body dari server ke dalam string
+		resBodyStr := wrapped.body.String()
+
+		// 🚀 3. SMART FILTERING: CCTV PINTAR
+		// Cek apakah ini endpoint operasional/internal
+		isOperational := r.URL.Path == "/status" || r.URL.Path == "/metrics" || (len(r.URL.Path) >= 14 && r.URL.Path[:14] == "/api/dashboard")
+
+		// JIKA ini endpoint operasional DAN statusnya AMAN (di bawah 400),
+		// BERHENTI DI SINI. Jangan kotori database!
+		if isOperational && wrapped.statusCode < 400 {
+			return
+		}
+
+		// --- JIKA TIDAK AMAN (DISERANG) ATAU ENDPOINT PUBLIK, LANJUT CATAT KE DB ---
+
 		latency := time.Since(start)
 		wafReason := wrapped.Header().Get("X-Guardian-WAF-Reason")
 		reqIP := GetIP(r)
 
-		// 🛠️ MOCK IP UNTUK TESTING (Opsional: Hapus jika sudah deploy ke VPS beneran)
 		if reqIP == "localhost" || reqIP == "::1" || reqIP == "127.0.0.1" {
 			reqIP = "180.252.170.158"
 		}
@@ -50,7 +68,6 @@ func Logger(geoDB *geoip2.Reader, logUC *usecase.LogUsecase, next http.Handler) 
 		browser, os, isBot := uaparser.Parse(reqUA)
 		logID := uuid.New().String()
 
-		// 🌍 GEOIP LOOKUP (Pindahkan ke sini agar Zerolog bisa pakai)
 		country, city := "Unknown", "Unknown"
 		if geoDB != nil {
 			ip := net.ParseIP(reqIP)
@@ -64,7 +81,6 @@ func Logger(geoDB *geoip2.Reader, logUC *usecase.LogUsecase, next http.Handler) 
 			}
 		}
 
-		// 📺 A. CETAK KE TERMINAL (Fast View)
 		statusColor := "\033[32m"
 		if wrapped.statusCode >= 400 {
 			statusColor = "\033[33m"
@@ -77,7 +93,6 @@ func Logger(geoDB *geoip2.Reader, logUC *usecase.LogUsecase, next http.Handler) 
 			time.Now().Format("15:04:05"), statusColor, wrapped.statusCode, "\033[0m",
 			latency, reqIP, country, r.Method, r.URL.Path)
 
-		// 📁 B. TULIS KE app.log (Sekarang lengkap dengan Country/City!)
 		logEvent := log.Info()
 		if wrapped.statusCode >= 400 {
 			logEvent = log.Warn()
@@ -86,8 +101,8 @@ func Logger(geoDB *geoip2.Reader, logUC *usecase.LogUsecase, next http.Handler) 
 		logEvent.
 			Str("log_id", logID).
 			Str("ip", reqIP).
-			Str("country", country). // 🌍 Muncul di log!
-			Str("city", city).       // 🌍 Muncul di log!
+			Str("country", country).
+			Str("city", city).
 			Str("method", r.Method).
 			Str("path", r.URL.Path).
 			Int("status", wrapped.statusCode).
@@ -97,8 +112,8 @@ func Logger(geoDB *geoip2.Reader, logUC *usecase.LogUsecase, next http.Handler) 
 			Bool("is_bot", isBot).
 			Msg("AccessLog")
 
-		// 3. Offload ke LogUsecase (Database)
-		go func(status int, lat time.Duration, path, method, ua, ip, body, reason, cty, ctr string) {
+		// 🚀 FIX: Selaraskan parameter go func
+		go func(status int, lat time.Duration, path, method, ua, ip, reqBody, reason, cty, ctr, resBody string) {
 			logData := &security_log.SecurityLog{
 				ID:        uuid.New().String(),
 				Timestamp: time.Now().UTC(),
@@ -113,12 +128,12 @@ func Logger(geoDB *geoip2.Reader, logUC *usecase.LogUsecase, next http.Handler) 
 				Browser:   browser,
 				OS:        os,
 				IsBot:     isBot,
-				Body:      body,
+				Body:      reqBody, // 👈 FIX: Ganti 'body' menjadi 'reqBody'
 			}
 
-			enrichStatusData(logData, reason)
+			enrichStatusData(logData, reason, resBody) // 👈 FIX: Kirim resBody ke sini
 			logUC.LogAndEvaluate(context.Background(), logData, reason)
-		}(wrapped.statusCode, latency, r.URL.Path, r.Method, reqUA, reqIP, bodyStr, wafReason, city, country)
+		}(wrapped.statusCode, latency, r.URL.Path, r.Method, reqUA, reqIP, bodyStr, wafReason, city, country, resBodyStr) // 👈 FIX: Tambahkan resBodyStr di sini
 	})
 }
 
@@ -127,6 +142,7 @@ func Logger(geoDB *geoip2.Reader, logUC *usecase.LogUsecase, next http.Handler) 
 type responseWriter struct {
 	http.ResponseWriter
 	statusCode int
+	body       *bytes.Buffer // 🚀 Merekam jawaban (response) dari server
 }
 
 func (rw *responseWriter) WriteHeader(code int) {
@@ -140,11 +156,11 @@ func (rw *responseWriter) Write(b []byte) (int, error) {
 	if rw.statusCode == 0 {
 		rw.statusCode = http.StatusOK
 	}
+	rw.body.Write(b) // 🚀 Simpan ke memori logger sebelum dikirim ke luar
 	return rw.ResponseWriter.Write(b)
 }
 
-// Pisahkan fungsi enrich hanya untuk status, Geo sudah diproses di atas
-func enrichStatusData(l *security_log.SecurityLog, reason string) {
+func enrichStatusData(l *security_log.SecurityLog, reason string, resBody string) {
 	l.IsBlocked = l.Status >= 400
 	l.ThreatType = "None"
 	l.ThreatDetails = "-"
@@ -158,6 +174,27 @@ func enrichStatusData(l *security_log.SecurityLog, reason string) {
 			l.ThreatDetails = "Too Many Requests"
 		} else {
 			l.ThreatType = "ResponseError"
+
+			// 🚀 Coba ekstrak pesan error dari JSON response server
+			var errResp map[string]interface{}
+			if err := json.Unmarshal([]byte(resBody), &errResp); err == nil {
+				// Cek apakah ada field "error" atau "message" di JSON
+				if errMsg, ok := errResp["error"].(string); ok {
+					l.ThreatDetails = errMsg
+					return
+				}
+				if msg, ok := errResp["message"].(string); ok {
+					l.ThreatDetails = msg
+					return
+				}
+			}
+
+			// Kalau JSON gagal diparse atau formatnya beda, tampilkan raw text (jika pendek)
+			if resBody != "" && len(resBody) < 200 {
+				l.ThreatDetails = resBody
+			} else {
+				l.ThreatDetails = fmt.Sprintf("Error (Status %d)", l.Status)
+			}
 		}
 	}
 }
