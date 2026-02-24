@@ -1,4 +1,5 @@
-package interfaces
+// File: pkg/errors/app_error.go
+package errors
 
 import "net/http"
 
@@ -17,7 +18,7 @@ func NewAppError(code int, msg string) error {
 	return &AppError{Code: code, Message: msg}
 }
 
-// --- Errors dengan Status Code ---
+// --- Global Errors ---
 var (
 	ErrInvalidCredentials = NewAppError(http.StatusUnauthorized, "invalid username or password")
 	ErrInvalidJSONFormat  = NewAppError(http.StatusBadRequest, "invalid json format")

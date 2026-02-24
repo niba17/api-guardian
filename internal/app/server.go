@@ -2,18 +2,17 @@ package app
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
-	"github.com/oschwald/geoip2-golang"
-	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog/log"
 )
 
-func startServer(h http.Handler, port string, rdb *redis.Client, geo *geoip2.Reader) error {
+func startServer(h http.Handler, port string, rdb io.Closer, db io.Closer, geo io.Closer) error {
 	srv := &http.Server{
 		Addr:    ":" + port,
 		Handler: h,
@@ -32,19 +31,24 @@ func startServer(h http.Handler, port string, rdb *redis.Client, geo *geoip2.Rea
 	<-stop
 	log.Info().Msg("⚠️ Shutting down...")
 
-	// 1. Buat context timeout dulu
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// 2. Matikan HTTP Server dulu (tunggu request aktif selesai)
+	// 1. Matikan HTTP Server
 	err := srv.Shutdown(ctx)
 
-	// 3. BARU TUTUP Resource pendukung (Redis & GeoIP)
-	// Sekarang aman, karena sudah tidak ada request aktif yang pakai resource ini
+	// 2. Tutup semua Resource (Order: Redis -> DB -> GeoIP)
 	if rdb != nil {
 		log.Info().Msg("🔌 Closing Redis connection...")
 		rdb.Close()
 	}
+
+	// 🚀 FIX: Tambahkan logika tutup DB di sini
+	if db != nil {
+		log.Info().Msg("🐘 Closing PostgreSQL connection...")
+		db.Close()
+	}
+
 	if geo != nil {
 		log.Info().Msg("🌍 Closing GeoIP database...")
 		geo.Close()

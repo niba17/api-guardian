@@ -8,33 +8,33 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// RateLimitRepo adalah implementasi tertutup (private struct)
-type RateLimitRepo struct {
+// redisRateLimitRepo adalah implementasi tertutup (private struct)
+type redisRateLimitRepo struct {
 	client *redis.Client
 }
 
 // NewRateLimitRepository merakit Redis dan mengembalikan kontrak interface
-func NewRateLimitRepository(client *redis.Client) interfaces.LimitRepository {
-	return &RateLimitRepo{client: client}
+func NewRateLimitRepository(client *redis.Client) interfaces.RateLimitRepository {
+	return &redisRateLimitRepo{client: client}
 }
 
-func (r *RateLimitRepo) Exists(ctx context.Context, key string) (int64, error) {
+func (r *redisRateLimitRepo) Exists(ctx context.Context, key string) (int64, error) {
 	return r.client.Exists(ctx, key).Result()
 }
 
-func (r *RateLimitRepo) Incr(ctx context.Context, key string) (int64, error) {
+func (r *redisRateLimitRepo) Incr(ctx context.Context, key string) (int64, error) {
 	return r.client.Incr(ctx, key).Result()
 }
 
-func (r *RateLimitRepo) Expire(ctx context.Context, key string, expiration time.Duration) (bool, error) {
+func (r *redisRateLimitRepo) Expire(ctx context.Context, key string, expiration time.Duration) (bool, error) {
 	return r.client.Expire(ctx, key, expiration).Result()
 }
 
-func (r *RateLimitRepo) Set(ctx context.Context, key string, value interface{}, expiration time.Duration) error {
+func (r *redisRateLimitRepo) Set(ctx context.Context, key string, value interface{}, expiration time.Duration) error {
 	return r.client.Set(ctx, key, value, expiration).Err()
 }
 
-func (r *RateLimitRepo) Ping(ctx context.Context) error {
+func (r *redisRateLimitRepo) Ping(ctx context.Context) error {
 	return r.client.Ping(ctx).Err()
 }
 
@@ -69,7 +69,7 @@ var tokenBucketScript = redis.NewScript(`
 	return {allowed, math.floor(tokens)}
 `)
 
-func (r *RateLimitRepo) TakeToken(ctx context.Context, key string, rate_limit int, burst int, rate float64) (bool, int, error) {
+func (r *redisRateLimitRepo) TakeToken(ctx context.Context, key string, rate_limit int, burst int, rate float64) (bool, int, error) {
 	now := time.Now().Unix()
 	res, err := tokenBucketScript.Run(ctx, r.client, []string{key}, burst, rate, now).Result()
 	if err != nil {

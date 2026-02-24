@@ -3,77 +3,109 @@ package app
 import (
 	"api-guardian/internal/config"
 	"api-guardian/internal/database/postgre"
+	"api-guardian/internal/database/postgre/migrate"
+	"api-guardian/internal/database/postgre/seed"
 	"api-guardian/internal/database/redis"
 	"api-guardian/internal/delivery/http"
 	"api-guardian/internal/delivery/http/handler"
 	"api-guardian/internal/delivery/http/middleware"
-	"api-guardian/internal/domain/security_log"
-	"api-guardian/internal/domain/user"
+	authInterfaces "api-guardian/internal/domain/auth/interfaces"
+	cacheInterfaces "api-guardian/internal/domain/cache/interfaces"
+	dashInterfaces "api-guardian/internal/domain/dashboard/interfaces"
+	healthInterfaces "api-guardian/internal/domain/health/interfaces"
+	rlInterfaces "api-guardian/internal/domain/rate_limit/interfaces"
+	logInterfaces "api-guardian/internal/domain/security_log/interfaces"
+	userInterfaces "api-guardian/internal/domain/user/interfaces"
 	"api-guardian/internal/infrastructure/auth"
 	"api-guardian/internal/proxy"
 	"api-guardian/internal/repository"
 	"api-guardian/internal/usecase"
 
-	"github.com/oschwald/geoip2-golang"
-	"github.com/rs/zerolog/log"
+	locInterfaces "api-guardian/internal/domain/location/interfaces"
+
+	"api-guardian/internal/database/geoip"
 )
 
-// Run mengoordinasi inisialisasi seluruh komponen aplikasi
 func Run(cfg *config.AppConfig) error {
-
 	// 1. Resources & Infrastructure
-	rdb := redis.InitRedis(cfg.RedisAddr)
-	db := postgre.InitDB(cfg.DatabaseDSN)
-	db.AutoMigrate(&user.User{}, &security_log.SecurityLog{})
+	dbInstance := postgre.InitDB(cfg.DatabaseDSN)
+	rdbInstance := redis.InitRedis(cfg.RedisAddr)
+	geoDB := geoip.InitGeoIP(cfg.GeoDBPath)
 
-	postgre.SeedAdmin(db)
-
-	// Resource cleanup ditangani di server.go melalui startServer
-	geoDB, err := geoip2.Open(cfg.GeoDBPath)
-	if err != nil {
-		// Kita pakai Warning saja agar aplikasi tidak mati, tapi kita tahu ada yang salah
-		log.Warn().
-			Str("path", cfg.GeoDBPath).
-			Err(err).
-			Msg("🌍 GeoIP Database NOT FOUND. Location tracking will be 'Unknown'")
-	} else {
-		log.Info().Str("path", cfg.GeoDBPath).Msg("🌍 GeoIP Database Loaded Successfully")
-	}
-	lb, err := proxy.NewLoadBalance(cfg.TargetURLs)
-	if err != nil {
-		return err // Hentikan jika Load Balancer gagal
+	if dbInstance != nil && dbInstance.GetDB() != nil {
+		migrate.Run(dbInstance.GetDB())
+		_ = seed.Run(dbInstance.GetDB())
 	}
 
-	// 2. Wiring Dependencies (Dependency Injection)
-	rateLimitRepo := repository.NewRateLimitRepository(rdb)
-	userRepo := repository.NewUserRepository(db)
-	logRepo := repository.NewSecurityLogRepository(db)
-	cacheRepo := repository.NewCacheRepository(rdb)
+	lb, err := proxy.NewLoadBalance(cfg)
+	if err != nil {
+		return err
+	}
 
-	// Usecase
-	authUC := usecase.NewAuthUsecase(userRepo, auth.NewBcryptHasher(), auth.NewJWTProvider(cfg.JWTSecret))
-	banUC := usecase.NewBanUsecase(rateLimitRepo, cfg.RateLimit)
-	logUC := usecase.NewLogUsecase(logRepo, banUC) // LogUC butuh BanUC
-	cacheUC := usecase.NewCacheUsecase(cacheRepo, cfg.CacheTTL)
-	dashboardUC := usecase.NewDashboardUsecase(cacheRepo, logRepo)
+	// 2. Wiring Repositories (Semua pakai var dan Interface)
+	// -----------------------------------------------------
+	var rateLimitRepo rlInterfaces.RateLimitRepository = repository.NewRateLimitRepository(rdbInstance)
+	var userRepo userInterfaces.UserRepository = repository.NewUserRepository(dbInstance.GetDB())
+	var logRepo logInterfaces.SecurityLogRepository = repository.NewSecurityLogRepository(dbInstance.GetDB())
+	var cacheRepo cacheInterfaces.CacheRepository = repository.NewCacheRepository(rdbInstance)
+	var locRepo locInterfaces.LocationRepository = repository.NewLocationRepository(geoDB)
 
-	// 3. Router & Core Handler
+	// 3. Inisialisasi Usecase (Semua pakai var dan Interface)
+	// -----------------------------------------------------
+	var authUC authInterfaces.AuthUsecase = usecase.NewAuthUsecase(
+		userRepo,
+		auth.NewBcryptHasher(),
+		auth.NewJWTProvider(cfg.JWTSecret),
+	)
+
+	var banUC rlInterfaces.BanUsecase = usecase.NewBanUsecase(
+		rateLimitRepo,
+		cfg.RateLimit,
+	)
+
+	var logUC logInterfaces.SecurityLogUsecase = usecase.NewLogUsecase(
+		logRepo,
+		banUC,
+	)
+
+	var cacheUC cacheInterfaces.CacheUsecase = usecase.NewCacheUsecase(
+		cacheRepo,
+		cfg.CacheTTL,
+	)
+
+	var dashboardUC dashInterfaces.DashboardUsecase = usecase.NewDashboardUsecase(
+		cacheRepo,
+		logRepo,
+	)
+
+	var healthUC healthInterfaces.HealthUsecase = usecase.NewHealthUsecase(
+		rateLimitRepo,
+	)
+
+	var locUC locInterfaces.LocationUsecase = usecase.NewLocationUsecase(locRepo)
+
+	// 4. Router & Core Handler
 	jwtMW := middleware.JWTMiddleware([]byte(cfg.JWTSecret))
 
-	// Menggunakan router murni dari delivery/http
 	router := http.NewRouter(
 		handler.NewAuthHandler(authUC),
 		handler.NewDashboardHandler(dashboardUC),
-		handler.NewHealthHandler(rateLimitRepo),
+		handler.NewHealthHandler(healthUC),
 		jwtMW,
 		lb,
 	)
 
-	// 4. Wrap Global Middlewares
-	// Memanggil fungsi dari internal/app/middleware.go
-	finalHandler := wrapGlobalMiddlewares(router, rateLimitRepo, geoDB, logUC, cacheUC, banUC, cfg)
+	// 5. Wrap Global Middlewares
+	finalHandler := wrapGlobalMiddlewares(
+		router,
+		rateLimitRepo,
+		logUC,
+		cacheUC,
+		banUC,
+		locUC,
+		cfg,
+	)
 
-	// 5. Run Server Lifecycle
-	// Memanggil fungsi dari internal/app/server.go (Graceful Shutdown)
-	return startServer(finalHandler, cfg.Port, rdb, geoDB)
+	// 6. Run Server Lifecycle
+	return startServer(finalHandler, cfg.Port, rdbInstance, dbInstance, geoDB)
 }

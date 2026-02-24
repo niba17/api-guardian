@@ -1,45 +1,25 @@
 package handler
 
 import (
-	"api-guardian/internal/domain/rate_limit/interfaces" // Pastikan interface LimitRepository ada di sini
-	"context"
-	"encoding/json"
+	"api-guardian/internal/domain/health/interfaces"
+	"api-guardian/pkg/response"
 	"net/http"
-	"time"
 )
 
-// 1. Definisikan Struct (Bukan Function lagi)
 type HealthHandler struct {
-	Store interfaces.LimitRepository
+	HealthUC interfaces.HealthUsecase
 }
 
-// 2. Constructor untuk Inject Dependency
-func NewHealthHandler(store interfaces.LimitRepository) *HealthHandler {
+func NewHealthHandler(uc interfaces.HealthUsecase) *HealthHandler {
 	return &HealthHandler{
-		Store: store,
+		HealthUC: uc,
 	}
 }
 
-// 3. Method Check (Handler-nya)
 func (h *HealthHandler) Check(w http.ResponseWriter, r *http.Request) {
-	redisStatus := "Connected"
+	// 1. Panggil Usecase (Biarkan Usecase yang mikir logika Redis dll)
+	status := h.HealthUC.CheckHealth(r.Context())
 
-	// Panggil via h.Store (Struct Field), bukan parameter fungsi
-	if h.Store != nil {
-		if err := h.Store.Ping(context.Background()); err != nil {
-			redisStatus = "Disconnected: " + err.Error()
-		}
-	} else {
-		redisStatus = "Not Configured"
-	}
-
-	status := map[string]string{
-		"system":           "Healthy",
-		"redis_connection": redisStatus,
-		"circuit_breaker":  "Closed (Normal)",
-		"time":             time.Now().UTC().Format(time.RFC3339),
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(status)
+	// 2. Balas pakai Response Wrapper standar Bos
+	response.JSON(w, http.StatusOK, status)
 }

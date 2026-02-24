@@ -1,36 +1,28 @@
 package usecase
 
 import (
+	cacheIntf "api-guardian/internal/domain/cache/interfaces"
 	"context"
 	"time"
-
-	// 👈 Import kontrak CacheRepository yang sudah kita buat
-	// Sesuaikan path-nya jika Bos menaruhnya di folder lain
-	cacheIntf "api-guardian/internal/domain/cache/interfaces"
 )
 
-// CacheUsecase menangani logika bisnis caching
-type CacheUsecase struct {
-	cacheRepo cacheIntf.CacheRepository // 👈 Ganti *redis.Client dengan Interface
+type cacheUsecase struct {
+	cacheRepo cacheIntf.CacheRepository
 	TTL       time.Duration
 }
 
-// Constructor sekarang meminta cacheRepo, bukan rdb mentah
-func NewCacheUsecase(repo cacheIntf.CacheRepository, ttl time.Duration) *CacheUsecase {
-	return &CacheUsecase{
+func NewCacheUsecase(repo cacheIntf.CacheRepository, ttl time.Duration) *cacheUsecase {
+	return &cacheUsecase{
 		cacheRepo: repo,
 		TTL:       ttl,
 	}
 }
 
-// Get mengambil data cache berdasarkan key
-func (u *CacheUsecase) Get(ctx context.Context, key string) (string, error) {
-	// 🚀 Langsung oper ke Repository
+func (u *cacheUsecase) Get(ctx context.Context, key string) (string, error) {
 	return u.cacheRepo.Get(ctx, key)
 }
 
-// Set menyimpan data ke cache dengan durasi TTL
-func (u *CacheUsecase) Set(ctx context.Context, key string, value []byte) error {
-	// 🚀 Langsung oper ke Repository
+// 🚀 FIX: Gunakan 'U' besar pada cacheUsecase dan sesuaikan nama field (cacheRepo & TTL)
+func (u *cacheUsecase) Set(ctx context.Context, key string, value interface{}) error {
 	return u.cacheRepo.Set(ctx, key, value, u.TTL)
 }

@@ -1,7 +1,7 @@
 package config
 
 import (
-	"fmt" // 👈 Tambahkan ini untuk merakit DSN
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -19,12 +19,17 @@ type AppConfig struct {
 	AllowedOrigins []string
 	CacheTTL       time.Duration
 	GeoDBPath      string
-	DatabaseDSN    string // 👈 Tetap satu string, tapi kita rakit di bawah
+	DatabaseDSN    string
 	RedisAddr      string
 	JWTSecret      string
 	RateLimit      int
 	RefillRate     float64
 	BurstCapacity  int
+	CBMaxRequests  uint32
+	CBIntervalSec  time.Duration
+	CBTimeoutSec   time.Duration
+	CBMinRequests  uint32
+	CBFailRatio    float64
 }
 
 func Load() *AppConfig {
@@ -32,7 +37,6 @@ func Load() *AppConfig {
 		log.Info().Msg(".env not found, using Environment Variables system")
 	}
 
-	// 1. Ambil komponen database satu per satu
 	dbHost := getEnv("DB_HOST", "localhost")
 	dbPort := getEnv("DB_PORT", "5432")
 	dbUser := getEnv("DB_USER", "postgres")
@@ -41,29 +45,33 @@ func Load() *AppConfig {
 	dbSSL := getEnv("DB_SSLMODE", "disable")
 	dbTZ := getEnv("DB_TIMEZONE", "UTC")
 
-	// 2. Rakit DSN secara otomatis
-	// Ini membuat .env Bos lebih rapi dan aman
 	dsn := fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%s sslmode=%s TimeZone=%s",
 		dbHost, dbUser, dbPass, dbName, dbPort, dbSSL, dbTZ)
 
 	return &AppConfig{
 		Port:           getEnv("PORT", "8080"),
-		TargetURLs:     parseCSV(getEnv("TARGET_URL", "http://localhost:8081")),
+		TargetURLs:     parseCSV(getEnv("TARGET_URL", "https://www.google.com")),
 		APIKeys:        parseCSV(getEnv("API_KEYS", "")),
 		WhitelistIPs:   parseCSV(getEnv("WHITELIST_IPS", "")),
 		AllowedOrigins: parseCSV(getEnv("ALLOWED_ORIGINS", "http://localhost:5173")),
 		CacheTTL:       parseDuration(getEnv("CACHE_TTL", "2s")),
-		GeoDBPath:      getEnv("GEOIP_DB_PATH", "configs/geoip/GeoLite2-City.mmdb"),
-		DatabaseDSN:    dsn, // 👈 Hasil rakitan masuk ke sini
+		GeoDBPath:      getEnv("GEO_DB_PATH", "configs/geoip/GeoLite2-City.mmdb"),
+		DatabaseDSN:    dsn,
 		RedisAddr:      getEnv("REDIS_ADDR", "localhost:6379"),
 		JWTSecret:      getEnv("JWT_SECRET", "rahasia-negara-bos-jangan-disebar"),
 		RateLimit:      parseInt(getEnv("RATE_LIMIT", "5")),
 		RefillRate:     parseFloat(getEnv("REFILL_RATE", "0.5")),
 		BurstCapacity:  parseInt(getEnv("BURST_CAPACITY", "10")),
+		CBMaxRequests:  parseUint32(getEnv("CB_MAX_REQUESTS", "1")),
+		CBIntervalSec:  time.Duration(parseInt(getEnv("CB_INTERVAL_SEC", "10"))),
+		CBTimeoutSec:   time.Duration(parseInt(getEnv("CB_TIMEOUT_SEC", "30"))),
+		CBMinRequests:  parseUint32(getEnv("CB_MIN_REQUESTS", "3")),
+		CBFailRatio:    parseFloat(getEnv("CB_FAIL_RATIO", "0.6")),
 	}
 }
 
-// Helper sederhana agar Load() tetap bersih
+// --- HELPERS ---
+
 func parseCSV(s string) []string {
 	if s == "" {
 		return []string{}
@@ -90,20 +98,27 @@ func parseDuration(d string) time.Duration {
 	return v
 }
 
-// 🚀 Helper Baru untuk Angka Bulat
 func parseInt(s string) int {
 	v, err := strconv.Atoi(s)
 	if err != nil {
-		return 0 // atau nilai default aman lainnya
+		return 0
 	}
 	return v
 }
 
-// 🚀 Helper Baru untuk Angka Desimal
 func parseFloat(s string) float64 {
 	v, err := strconv.ParseFloat(s, 64)
 	if err != nil {
 		return 0.0
 	}
 	return v
+}
+
+// 🚀 Helper Baru untuk uint32 (Circuit Breaker)
+func parseUint32(s string) uint32 {
+	v, err := strconv.ParseUint(s, 10, 32)
+	if err != nil {
+		return 0
+	}
+	return uint32(v)
 }

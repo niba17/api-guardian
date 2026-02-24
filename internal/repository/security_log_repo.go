@@ -1,31 +1,33 @@
 package repository
 
 import (
+	"api-guardian/internal/domain/dashboard"
 	"api-guardian/internal/domain/security_log"
 	"api-guardian/internal/domain/security_log/interfaces"
 
 	"gorm.io/gorm"
 )
 
-type gormSecurityLogRepo struct {
+// 🚀 1. GANTI: Jadi huruf kecil (Private)
+type securityLogRepository struct {
 	db *gorm.DB
 }
 
-// Return-nya sekarang menggunakan interfaces.SecurityLogRepository
+// 🚀 2. CONSTRUCTOR: Return-nya menggunakan Interface dari Domain
 func NewSecurityLogRepository(db *gorm.DB) interfaces.SecurityLogRepository {
-	return &gormSecurityLogRepo{db: db}
+	return &securityLogRepository{db: db}
 }
 
-func (r *gormSecurityLogRepo) Save(log *security_log.SecurityLog) error {
+// 🚀 3. METHOD: Tetap Besar (Harus sesuai dengan Interface di Domain)
+func (r *securityLogRepository) Save(log *security_log.SecurityLog) error {
 	return r.db.Create(log).Error
 }
 
-func (r *gormSecurityLogRepo) GetStats() (security_log.DashboardStats, error) {
-	var stats security_log.DashboardStats
+func (r *securityLogRepository) GetStats() (dashboard.Dashboard, error) {
+	var stats dashboard.Dashboard
 	var total, blocked, unique int64
 	var avg float64
 
-	// Query satu-satu untuk akurasi tinggi
 	r.db.Model(&security_log.SecurityLog{}).Count(&total)
 	r.db.Model(&security_log.SecurityLog{}).Where("is_blocked = ?", true).Count(&blocked)
 	r.db.Model(&security_log.SecurityLog{}).Distinct("ip").Count(&unique)
@@ -40,7 +42,7 @@ func (r *gormSecurityLogRepo) GetStats() (security_log.DashboardStats, error) {
 	return stats, nil
 }
 
-func (r *gormSecurityLogRepo) GetRecent(limit int) ([]security_log.SecurityLog, error) {
+func (r *securityLogRepository) GetRecent(limit int) ([]security_log.SecurityLog, error) {
 	var logs []security_log.SecurityLog
 	err := r.db.Order("timestamp desc").Limit(limit).Find(&logs).Error
 	return logs, err

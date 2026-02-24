@@ -1,7 +1,7 @@
 package response
 
 import (
-	"api-guardian/internal/domain/auth/interfaces"
+	"api-guardian/pkg/errors"
 	"encoding/json"
 	"net/http"
 )
@@ -18,7 +18,7 @@ func Error(w http.ResponseWriter, err error) {
 	message := err.Error()
 
 	// Cek apakah ini AppError dari Usecase?
-	if appErr, ok := err.(*interfaces.AppError); ok {
+	if appErr, ok := err.(*errors.AppError); ok {
 		statusCode = appErr.Code
 		message = appErr.Message
 	}

@@ -5,8 +5,8 @@ import (
 	"time"
 )
 
-// LimitRepository adalah kontrak. Middleware tidak peduli ini Redis atau bukan.
-type LimitRepository interface {
+// RateLimitRepository adalah kontrak. Middleware tidak peduli ini Redis atau bukan.
+type RateLimitRepository interface {
 	Exists(ctx context.Context, key string) (int64, error)
 	Incr(ctx context.Context, key string) (int64, error)
 	Expire(ctx context.Context, key string, expiration time.Duration) (bool, error)

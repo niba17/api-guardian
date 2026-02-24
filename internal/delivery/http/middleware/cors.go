@@ -11,21 +11,21 @@ func CORSMiddleware(allowedOrigins []string) func(http.Handler) http.Handler {
 			origin := r.Header.Get("Origin")
 
 			// 1. Cek apakah origin dari request ada di whitelist kita
-			allow := false
+			isAllowed := false
 			if len(allowedOrigins) == 1 && allowedOrigins[0] == "*" {
-				allow = true // Buka untuk publik (Public API)
-				origin = "*" // Set origin menjadi *
+				isAllowed = true // Buka untuk publik (Public API)
+				origin = "*"     // Set origin menjadi *
 			} else {
 				for _, o := range allowedOrigins {
 					if o == origin {
-						allow = true
+						isAllowed = true
 						break
 					}
 				}
 			}
 
 			// 2. Set Header jika diizinkan
-			if allow && origin != "" {
+			if isAllowed && origin != "" {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
 				// Wajib jika frontend mengirimkan kredensial (seperti Cookie/Token) lintas domain
 				w.Header().Set("Access-Control-Allow-Credentials", "true")

@@ -42,17 +42,22 @@ func (c *CircuitBreakTransport) RoundTrip(req *http.Request) (*http.Response, er
 	return result.(*http.Response), nil
 }
 
-// NewCircuitBreak factory untuk membuat sekering baru
-func NewCircuitBreak(name string) *gobreaker.CircuitBreaker {
-	// 🚀 PERBAIKAN TYPO: Tambahkan "er" menjadi gobreaker.NewCircuitBreaker
+// NewCircuitBreak factory untuk membuat sekering baru (SEKARANG DINAMIS!)
+func NewCircuitBreak(name string, maxReq uint32, intervalSec time.Duration, timeoutSec time.Duration, minReq uint32, failRatio float64) *gobreaker.CircuitBreaker {
+
 	return gobreaker.NewCircuitBreaker(gobreaker.Settings{
 		Name:        name,
-		MaxRequests: 1,
-		Interval:    10 * time.Second,
-		Timeout:     30 * time.Second,
+		MaxRequests: maxReq,
+		Interval:    intervalSec * time.Second, // Konversi ke Detik
+		Timeout:     timeoutSec * time.Second,  // Konversi ke Detik
 		ReadyToTrip: func(counts gobreaker.Counts) bool {
-			failRatio := float64(counts.TotalFailures) / float64(counts.Requests)
-			return counts.Requests >= 3 && failRatio >= 0.6
+			// Cegah pembagian dengan nol
+			if counts.Requests == 0 {
+				return false
+			}
+
+			currentFailRatio := float64(counts.TotalFailures) / float64(counts.Requests)
+			return counts.Requests >= minReq && currentFailRatio >= failRatio
 		},
 	})
 }

@@ -1,8 +1,7 @@
 package middleware
 
 import (
-	"api-guardian/internal/domain/rate_limit/interfaces"
-	"api-guardian/internal/usecase" // 👈 Import Usecase
+	rlInterfaces "api-guardian/internal/domain/rate_limit/interfaces"
 	"context"
 	"fmt"
 	"net/http"
@@ -10,17 +9,16 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-// RateLimit sekarang menerima BanUsecase!
-func RateLimit(store interfaces.LimitRepository, banUC *usecase.BanUsecase, whitelist []string, refillRate float64, burstCapacity int, next http.Handler) http.Handler {
+func RateLimit(rdb rlInterfaces.RateLimitRepository, banUC rlInterfaces.BanUsecase, whitelist []string, refillRate float64, burstCapacity int, next http.Handler) http.Handler {
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
-		ip := GetIP(r) // 👈 Ingat, fungsi ini masih misteri! 😁
+		ip := GetIP(r)
 
 		// 1. CEK BLACKLIST
 		banKey := "blacklist:" + ip
-		if isBanned, _ := store.Exists(ctx, banKey); isBanned > 0 {
-			log.Warn().Str("ip", ip).Msg("Refusing request from Blacklisted IP")
+		if isBanned, _ := rdb.Exists(ctx, banKey); isBanned > 0 {
+			// 🛑 log.Warn() DIHAPUS: Biarkan logger.go yang mencatat log 403-nya biar rapi!
 			w.Header().Set("X-Guardian-WAF-Reason", "IP Blacklisted")
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusForbidden)
@@ -38,11 +36,15 @@ func RateLimit(store interfaces.LimitRepository, banUC *usecase.BanUsecase, whit
 
 		// 3. TOKEN BUCKET LOGIC 🛡️
 		limitKey := "bucket:" + ip
-		// 🚀 GUNAKAN PARAMETER DINAMIS DI SINI
-		allowed, remaining, err := store.TakeToken(ctx, limitKey, 1, burstCapacity, refillRate)
+		allowed, remaining, err := rdb.TakeToken(ctx, limitKey, 1, burstCapacity, refillRate)
 
 		if err != nil {
-			log.Error().Err(err).Msg("REDIS ERROR: Fail-Closed")
+			// 🚀 UBAH KE DEBUG: Tidak akan tampil di terminal secara default,
+			// tapi WAF Logger (logger.go) tetap akan mencatat HTTP 503-nya!
+			log.Debug().Err(err).Msg("REDIS ERROR: Fail-Closed triggered")
+
+			// Tambahkan WAF Reason agar UI Dashboard tahu ini error karena sistem keamanan offline
+			w.Header().Set("X-Guardian-WAF-Reason", "Fail-Closed: WAF Offline")
 			w.WriteHeader(http.StatusServiceUnavailable)
 			return
 		}
@@ -51,9 +53,7 @@ func RateLimit(store interfaces.LimitRepository, banUC *usecase.BanUsecase, whit
 
 		// 4. JIKA LIMIT HABIS
 		if !allowed {
-			w.Header().Set("X-Guardian-WAF-Reason", "Rate RateLimit Exceeded")
-
-			// 🚀 PANGGIL USECASE
+			w.Header().Set("X-Guardian-WAF-Reason", "Rate Limit Exceeded")
 			go banUC.ExecuteAutoBan(context.Background(), ip)
 
 			w.Header().Set("Content-Type", "application/json")

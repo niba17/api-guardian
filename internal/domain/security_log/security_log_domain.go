@@ -2,6 +2,7 @@ package security_log
 
 import "time"
 
+// SecurityLog merepresentasikan tabel security_logs di database
 type SecurityLog struct {
 	ID            string    `gorm:"primaryKey;type:uuid" json:"id"`
 	Timestamp     time.Time `gorm:"index" json:"timestamp"`
@@ -20,14 +21,4 @@ type SecurityLog struct {
 	ThreatType    string    `gorm:"size:50" json:"threat_type"`
 	ThreatDetails string    `gorm:"size:255" json:"threat_details"`
 	Body          string    `gorm:"type:text" json:"body"`
-}
-
-// DashboardStats dipindah ke sini (sebagai Domain Value Object)
-type DashboardStats struct {
-	TotalRequests int            `json:"total_requests"`
-	TotalBlocked  int            `json:"total_blocked"`
-	TotalSuccess  int            `json:"total_success"`
-	UniqueIPs     int            `json:"unique_ips"`
-	AvgLatency    int64          `json:"avg_latency"`
-	TopIPs        map[string]int `json:"top_ips"`
 }

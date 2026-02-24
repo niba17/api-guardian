@@ -3,6 +3,7 @@ package handler
 import (
 	"api-guardian/internal/domain/auth/dto"
 	"api-guardian/internal/domain/auth/interfaces"
+	"api-guardian/pkg/errors"
 	"api-guardian/pkg/response"
 	"encoding/json"
 	"net/http"
@@ -21,7 +22,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 
 	// 1. Decode JSON
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		response.Error(w, interfaces.ErrInvalidJSONFormat)
+		response.Error(w, errors.ErrInvalidJSONFormat)
 		return
 	}
 

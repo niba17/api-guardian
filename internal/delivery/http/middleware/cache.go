@@ -1,14 +1,14 @@
 package middleware
 
 import (
-	"api-guardian/internal/usecase"
+	cacheInterfaces "api-guardian/internal/domain/cache/interfaces"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 )
 
 // Cache adalah middleware caching agresif untuk GET request
-func Cache(uc *usecase.CacheUsecase, next http.Handler) http.Handler {
+func Cache(uc cacheInterfaces.CacheUsecase, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// 1. Caching cuma berlaku untuk Method GET
 		if r.Method != http.MethodGet {

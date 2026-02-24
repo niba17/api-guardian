@@ -1,24 +1,30 @@
 package middleware
 
 import (
-	"api-guardian/internal/domain/security_log"
-	"api-guardian/internal/usecase"
-	"api-guardian/pkg/uaparser"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
+	"strings"
+	"sync"
 	"time"
 
+	locInterfaces "api-guardian/internal/domain/location/interfaces"
+	"api-guardian/internal/domain/security_log"
+	logInterfaces "api-guardian/internal/domain/security_log/interfaces"
+	"api-guardian/pkg/uaparser"
+
 	"github.com/google/uuid"
-	"github.com/oschwald/geoip2-golang"
 	"github.com/rs/zerolog/log"
 )
 
-func Logger(geoDB *geoip2.Reader, logUC *usecase.LogUsecase, next http.Handler) http.Handler {
+var (
+	recentSpamLogs sync.Map
+)
+
+func Logger(locUC locInterfaces.LocationUsecase, logUC logInterfaces.SecurityLogUsecase, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 
@@ -27,6 +33,8 @@ func Logger(geoDB *geoip2.Reader, logUC *usecase.LogUsecase, next http.Handler) 
 		if r.Method != http.MethodGet && r.Body != nil {
 			bodyBytes, _ := io.ReadAll(io.LimitReader(r.Body, 2048))
 			r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+
+			// 🚀 Panggil langsung, karena masih 1 rumah di package middleware
 			bodyStr = MaskPII(string(bodyBytes))
 		}
 
@@ -41,44 +49,58 @@ func Logger(geoDB *geoip2.Reader, logUC *usecase.LogUsecase, next http.Handler) 
 			wrapped.statusCode = http.StatusOK
 		}
 
-		// 🚀 Simpan response body dari server ke dalam string
 		resBodyStr := wrapped.body.String()
 
-		// 🚀 3. SMART FILTERING: CCTV PINTAR
-		// Cek apakah ini endpoint operasional/internal
-		isOperational := r.URL.Path == "/status" || r.URL.Path == "/metrics" || (len(r.URL.Path) >= 14 && r.URL.Path[:14] == "/api/dashboard")
-
-		// JIKA ini endpoint operasional DAN statusnya AMAN (di bawah 400),
-		// BERHENTI DI SINI. Jangan kotori database!
-		if isOperational && wrapped.statusCode < 400 {
-			return
-		}
-
-		// --- JIKA TIDAK AMAN (DISERANG) ATAU ENDPOINT PUBLIK, LANJUT CATAT KE DB ---
-
-		latency := time.Since(start)
-		wafReason := wrapped.Header().Get("X-Guardian-WAF-Reason")
+		// 🚀 Panggil langsung!
 		reqIP := GetIP(r)
 
 		if reqIP == "localhost" || reqIP == "::1" || reqIP == "127.0.0.1" {
 			reqIP = "180.252.170.158"
 		}
 
+		// 🚀 3. SMART FILTERING & ANTI-SPAM
+		path := r.URL.Path
+
+		isDashboard := strings.HasPrefix(path, "/api/dashboard")
+		isHealthCheck := path == "/health" || path == "/status" || path == "/metrics"
+
+		// Cek apakah ini IP kita sendiri (Orang Dalam)
+		isInternalIP := reqIP == "180.252.170.158" || reqIP == "127.0.0.1" || reqIP == "localhost" || reqIP == "::1"
+
+		// 🛑 A. ATURAN BISU (MUTE) UNTUK REQUEST SUKSES (< 400)
+		if wrapped.statusCode < 400 {
+			if isDashboard || (isHealthCheck && isInternalIP) {
+				return // DIBUANG! Jangan dicatat.
+			}
+		}
+
+		// 🛡️ B. Filter Anti-Spam (Debounce 2 Detik) HANYA UNTUK 403 (BANNED)
+		// Biarkan 429 lolos semua agar kita bisa melihat proses hacker menggedor pintu!
+		if wrapped.statusCode == 403 {
+			spamKey := fmt.Sprintf("%s_%s_%d", reqIP, path, wrapped.statusCode)
+
+			if lastSeen, exists := recentSpamLogs.Load(spamKey); exists {
+				if time.Since(lastSeen.(time.Time)) < 2*time.Second {
+					return // 🛑 BUANG DUPLIKAT SPAM 403!
+				}
+			}
+			recentSpamLogs.Store(spamKey, time.Now())
+		}
+
+		// --- LANJUT CATAT KE DB ---
+
+		latency := time.Since(start)
+		wafReason := wrapped.Header().Get("X-Guardian-WAF-Reason")
+
 		reqUA := r.UserAgent()
 		browser, os, isBot := uaparser.Parse(reqUA)
 		logID := uuid.New().String()
 
 		country, city := "Unknown", "Unknown"
-		if geoDB != nil {
-			ip := net.ParseIP(reqIP)
-			if record, err := geoDB.City(ip); err == nil {
-				if c, ok := record.Country.Names["en"]; ok {
-					country = c
-				}
-				if c, ok := record.City.Names["en"]; ok {
-					city = c
-				}
-			}
+		if locUC != nil {
+			loc := locUC.GetLocationByIP(r.Context(), reqIP)
+			country = loc.Country
+			city = loc.City
 		}
 
 		statusColor := "\033[32m"
@@ -89,10 +111,12 @@ func Logger(geoDB *geoip2.Reader, logUC *usecase.LogUsecase, next http.Handler) 
 			statusColor = "\033[31m"
 		}
 
+		// Log ke Terminal
 		fmt.Printf("📝 %s %s%d%s | %10s | %15s (%s) | %s %s\n",
 			time.Now().Format("15:04:05"), statusColor, wrapped.statusCode, "\033[0m",
 			latency, reqIP, country, r.Method, r.URL.Path)
 
+		// Log ke File/Zerolog
 		logEvent := log.Info()
 		if wrapped.statusCode >= 400 {
 			logEvent = log.Warn()
@@ -110,12 +134,13 @@ func Logger(geoDB *geoip2.Reader, logUC *usecase.LogUsecase, next http.Handler) 
 			Str("browser", browser).
 			Str("os", os).
 			Bool("is_bot", isBot).
+			Str("waf_reason", wafReason).
 			Msg("AccessLog")
 
-		// 🚀 FIX: Selaraskan parameter go func
+		// Log ke Database
 		go func(status int, lat time.Duration, path, method, ua, ip, reqBody, reason, cty, ctr, resBody string) {
 			logData := &security_log.SecurityLog{
-				ID:        uuid.New().String(),
+				ID:        uuid.New().String(), // Atau logID kalau mau sinkron
 				Timestamp: time.Now().UTC(),
 				IP:        ip,
 				Country:   ctr,
@@ -128,12 +153,12 @@ func Logger(geoDB *geoip2.Reader, logUC *usecase.LogUsecase, next http.Handler) 
 				Browser:   browser,
 				OS:        os,
 				IsBot:     isBot,
-				Body:      reqBody, // 👈 FIX: Ganti 'body' menjadi 'reqBody'
+				Body:      reqBody,
 			}
 
-			enrichStatusData(logData, reason, resBody) // 👈 FIX: Kirim resBody ke sini
+			enrichStatusData(logData, reason, resBody)
 			logUC.LogAndEvaluate(context.Background(), logData, reason)
-		}(wrapped.statusCode, latency, r.URL.Path, r.Method, reqUA, reqIP, bodyStr, wafReason, city, country, resBodyStr) // 👈 FIX: Tambahkan resBodyStr di sini
+		}(wrapped.statusCode, latency, r.URL.Path, r.Method, reqUA, reqIP, bodyStr, wafReason, city, country, resBodyStr)
 	})
 }
 
@@ -142,7 +167,7 @@ func Logger(geoDB *geoip2.Reader, logUC *usecase.LogUsecase, next http.Handler) 
 type responseWriter struct {
 	http.ResponseWriter
 	statusCode int
-	body       *bytes.Buffer // 🚀 Merekam jawaban (response) dari server
+	body       *bytes.Buffer
 }
 
 func (rw *responseWriter) WriteHeader(code int) {
@@ -156,7 +181,7 @@ func (rw *responseWriter) Write(b []byte) (int, error) {
 	if rw.statusCode == 0 {
 		rw.statusCode = http.StatusOK
 	}
-	rw.body.Write(b) // 🚀 Simpan ke memori logger sebelum dikirim ke luar
+	rw.body.Write(b)
 	return rw.ResponseWriter.Write(b)
 }
 
@@ -174,11 +199,8 @@ func enrichStatusData(l *security_log.SecurityLog, reason string, resBody string
 			l.ThreatDetails = "Too Many Requests"
 		} else {
 			l.ThreatType = "ResponseError"
-
-			// 🚀 Coba ekstrak pesan error dari JSON response server
 			var errResp map[string]interface{}
 			if err := json.Unmarshal([]byte(resBody), &errResp); err == nil {
-				// Cek apakah ada field "error" atau "message" di JSON
 				if errMsg, ok := errResp["error"].(string); ok {
 					l.ThreatDetails = errMsg
 					return
@@ -188,8 +210,6 @@ func enrichStatusData(l *security_log.SecurityLog, reason string, resBody string
 					return
 				}
 			}
-
-			// Kalau JSON gagal diparse atau formatnya beda, tampilkan raw text (jika pendek)
 			if resBody != "" && len(resBody) < 200 {
 				l.ThreatDetails = resBody
 			} else {

@@ -4,6 +4,7 @@ import (
 	"api-guardian/internal/domain/auth/dto"
 	authInterface "api-guardian/internal/domain/auth/interfaces"
 	userInterface "api-guardian/internal/domain/user/interfaces"
+	"api-guardian/pkg/errors"
 	"api-guardian/pkg/hashutil"
 	"fmt"
 	"strings"
@@ -32,18 +33,18 @@ func (u *authUsecase) Login(req dto.LoginRequest) (dto.LoginResponse, error) {
 	// 1. Tanya Repo
 	user, err := u.userRepo.GetUserByUsername(req.Username)
 	if err != nil {
-		return dto.LoginResponse{}, authInterface.ErrInvalidCredentials
+		return dto.LoginResponse{}, errors.ErrInvalidCredentials
 	}
 
 	// 2. Tanya Hasher
 	if !u.hasher.Compare(strings.TrimSpace(req.Password), user.PasswordHash) {
-		return dto.LoginResponse{}, authInterface.ErrInvalidCredentials
+		return dto.LoginResponse{}, errors.ErrInvalidCredentials
 	}
 
 	// 3. Tanya Token Service
 	token, err := u.tokenSvc.Generate(uint(user.ID), user.Username, user.Role)
 	if err != nil {
-		return dto.LoginResponse{}, authInterface.ErrInternalServer
+		return dto.LoginResponse{}, errors.ErrInternalServer
 	}
 
 	return dto.LoginResponse{

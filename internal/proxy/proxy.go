@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"api-guardian/internal/config" // 👈 Import config
 	"api-guardian/internal/delivery/http/middleware"
 	"fmt"
 	"net/http"
@@ -16,7 +17,10 @@ type LoadBalancer struct {
 	counter uint64
 }
 
-func NewLoadBalance(targets []string) (*LoadBalancer, error) {
+// 🚀 Ubah parameter dari targets []string menjadi cfg *config.AppConfig
+func NewLoadBalance(cfg *config.AppConfig) (*LoadBalancer, error) {
+	targets := cfg.TargetURLs
+
 	// 🛡️ PROTEKSI 1: Cek apakah target kosong di awal
 	if len(targets) == 0 {
 		return nil, fmt.Errorf("load balancer error: no valid backend targets provided")
@@ -38,8 +42,16 @@ func NewLoadBalance(targets []string) (*LoadBalancer, error) {
 
 		proxy := httputil.NewSingleHostReverseProxy(targetURL)
 
-		// 💡 Catatan: Pastikan nama fungsinya sudah Bos ganti jadi NewCircuitBreak di file middleware
-		cb := middleware.NewCircuitBreak(fmt.Sprintf("Backend-%d", i))
+		// 🚀 INI DIA PERBAIKANNYA: Panggil dengan 6 Parameter dari Config!
+		cb := middleware.NewCircuitBreak(
+			fmt.Sprintf("Backend-%d", i),
+			cfg.CBMaxRequests,
+			cfg.CBIntervalSec,
+			cfg.CBTimeoutSec,
+			cfg.CBMinRequests,
+			cfg.CBFailRatio,
+		)
+
 		proxy.Transport = &middleware.CircuitBreakTransport{
 			Transport: http.DefaultTransport,
 			CB:        cb,
@@ -68,7 +80,7 @@ func setupProxyCallbacks(proxy *httputil.ReverseProxy, targetURL *url.URL, rawTa
 		req.Header.Set("X-Origin-Host", targetURL.Host)
 		req.Header.Set("X-Forwarded-Host", req.Header.Get("Host"))
 
-		// 🚀 INI YANG PALING PENTING: Meneruskan IP asli ke backend!
+		// 🚀 Meneruskan IP asli ke backend
 		clientIP := middleware.GetIP(req)
 		req.Header.Set("X-Real-IP", clientIP)
 
@@ -80,16 +92,12 @@ func setupProxyCallbacks(proxy *httputil.ReverseProxy, targetURL *url.URL, rawTa
 		}
 	}
 
-	// 🚀 2. MODIFIKASI RESPONSE (Pulang dari Backend) -> INI FITUR BARU KITA!
+	// 2. MODIFIKASI RESPONSE (Pulang dari Backend)
 	proxy.ModifyResponse = func(resp *http.Response) error {
-		// 🛡️ Hapus jejak identitas asli target (Google/NodeJS/dll)
 		resp.Header.Del("Server")
 		resp.Header.Del("X-Powered-By")
 
-		// 🔒 Pasang identitas palsu kita
 		resp.Header.Set("Server", "api-guardian")
-
-		// 🛡️ Suntik header keamanan standar militer (OWASP)
 		resp.Header.Set("X-Content-Type-Options", "nosniff")
 		resp.Header.Set("X-Frame-Options", "SAMEORIGIN")
 		resp.Header.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
@@ -101,7 +109,6 @@ func setupProxyCallbacks(proxy *httputil.ReverseProxy, targetURL *url.URL, rawTa
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 		log.Error().Err(err).Str("backend", rawTarget).Msg("Proxy Error")
 
-		// Tambahkan balasan JSON agar rapi dan tidak merusak tampilan Front-End Bos
 		w.Header().Set("Content-Type", "application/json")
 
 		if err != nil && err.Error() == "circuit breaker is OPEN" {
